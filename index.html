@@ -26,6 +26,7 @@
     </div>
     <div class="top-actions">
       <button class="icon-btn wide" id="btn-save" title="存档 / 读档（S）">存档</button>
+      <button class="icon-btn" id="btn-kingdoms" title="世界一览（K）"><img src="assets/icons/menuList.png" alt="世界一览"></button>
       <button class="icon-btn" id="btn-shot" title="保存世界截图（F）"><img src="assets/icons/star.png" alt="截图"></button>
       <button class="icon-btn" id="btn-zoom-out" title="缩小视野"><img src="assets/icons/zoomOut.png" alt="缩小"></button>
       <button class="icon-btn" id="btn-zoom-in" title="放大视野"><img src="assets/icons/zoomIn.png" alt="放大"></button>
@@ -36,6 +37,7 @@
         <button class="icon-btn speed" data-speed="4" title="四倍速度（3）">4×</button>
         <button class="icon-btn" id="btn-step" title="推进两秒"><img src="assets/icons/next.png" alt="单步"></button>
       </div>
+      <button class="icon-btn wide" id="btn-settings" title="设置（O）">设置</button>
       <button class="icon-btn" id="btn-help" title="操作说明"><img src="assets/icons/information.png" alt="帮助"></button>
       <button class="icon-btn" id="btn-reset" title="重开世界"><img src="assets/icons/rewind.png" alt="重开"></button>
     </div>
@@ -74,6 +76,7 @@
   </div>
 
   <div id="toast"></div>
+  <div id="fps" class="hidden">60 FPS</div>
 
   <div id="save-menu" class="overlay hidden">
     <div class="save-panel">
@@ -84,6 +87,47 @@
         <button class="ghost-btn" id="btn-import">导入文件</button>
         <input type="file" id="file-import" accept=".json,application/json" hidden>
         <button class="ghost-btn" id="btn-save-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-menu" class="overlay hidden">
+    <div class="settings-panel">
+      <div class="panel-title">设置</div>
+      <div class="set-section">显示</div>
+      <div class="set-row"><span>国家边界</span><button class="switch" data-setting="borders" aria-label="国家边界"></button></div>
+      <div class="set-row"><span>村庄地名</span><button class="switch" data-setting="names" aria-label="村庄地名"></button></div>
+      <div class="set-row"><span>单位血条</span><button class="switch" data-setting="hpBars" aria-label="单位血条"></button></div>
+      <div class="set-row"><span>小地图</span><button class="switch" data-setting="minimap" aria-label="小地图"></button></div>
+      <div class="set-row"><span>帧率显示</span><button class="switch" data-setting="fps" aria-label="帧率显示"></button></div>
+      <div class="set-section">画质</div>
+      <div class="quality-row">
+        <button class="ghost-btn mini" data-quality="high">高</button>
+        <button class="ghost-btn mini" data-quality="medium">中</button>
+        <button class="ghost-btn mini" data-quality="low">低</button>
+      </div>
+      <div class="set-hint">低画质会降低渲染分辨率并减少粒子，适合手机或卡顿的设备。</div>
+      <div class="set-section">世界法则</div>
+      <div class="set-row"><span>自动战争</span><button class="switch" data-law="autoWar" aria-label="自动战争"></button></div>
+      <div class="set-row"><span>天灾事件</span><button class="switch" data-law="disasters" aria-label="天灾事件"></button></div>
+      <div class="set-row"><span>自然繁衍</span><button class="switch" data-law="growth" aria-label="自然繁衍"></button></div>
+      <div class="save-row">
+        <button class="ghost-btn" id="btn-settings-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="kingdom-menu" class="overlay hidden">
+    <div class="kingdom-panel">
+      <div class="panel-title">世界一览</div>
+      <div class="list-tabs">
+        <button class="ghost-btn mini active" data-list="kingdoms">国家</button>
+        <button class="ghost-btn mini" data-list="villages">村庄</button>
+        <button class="ghost-btn mini" data-list="units">单位</button>
+      </div>
+      <div id="kingdom-list"></div>
+      <div class="save-row">
+        <button class="ghost-btn" id="btn-kingdom-close">关闭</button>
       </div>
     </div>
   </div>
@@ -116,8 +160,10 @@
         <div><b>空格 / 1 2 3</b><span>暂停与 1×、2×、4× 时间流速</span></div>
         <div><b>方向键</b><span>平移镜头；+ / - 调整笔刷</span></div>
         <div><b>S / F</b><span>打开存档、保存截图</span></div>
+        <div><b>K / O</b><span>世界一览（国家/村庄/单位）、设置面板</span></div>
+        <div><b>触摸屏</b><span>单指拖动平移，轻点使用当前神力</span></div>
       </div>
-      <p class="help-note">人类会在村庄定居，农夫耕作、工匠造屋、战士卫国。国家之间会结盟、宣战、求和；国王战死会引发继承。火焰会蔓延，瘟疫与僵尸会传染，龙卷风、地震、火山与酸雨会改写地貌。</p>
+      <p class="help-note">人类会在村庄定居，农夫耕作、工匠造屋、战士卫国。国家之间会结盟、宣战、求和；国王战死会引发继承。火焰会蔓延，瘟疫与僵尸会传染，龙卷风、地震、火山与酸雨会改写地貌。设置里可以开关国界、地名、血条与自动战争。</p>
       <button id="btn-help-close" class="big-btn">明白了</button>
     </div>
   </div>

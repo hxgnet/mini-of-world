@@ -96,6 +96,8 @@ const img = p => IMG[p] || FALLBACK;
 let world = null;
 let terrainCanvas = null;
 let terrainCtx = null;
+let territoryCanvas = null;
+let territoryCtx = null;
 
 const cam = { x: 0, y: 0, zoom: 1.35 };
 const state = {
@@ -117,10 +119,55 @@ const state = {
   lastFxAt: 0,
   shake: 0,
   flash: 0,
-  lastMinimap: 0
+  lastMinimap: 0,
+  listTab: 'kingdoms',
+  cds: {}
 };
 
+const QUALITY_DPR = { high: 2, medium: 1.5, low: 1 };
+const EFFECT_CAP = { high: 260, medium: 180, low: 90 };
+
+const settings = {
+  borders: true,
+  names: true,
+  hpBars: true,
+  minimap: true,
+  fps: false,
+  quality: (typeof matchMedia !== 'undefined' && matchMedia('(max-width: 820px)').matches) ? 'medium' : 'high'
+};
+const SETTINGS_KEY = 'weichen_world_settings';
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) Object.assign(settings, JSON.parse(raw));
+  } catch (e) { /* 忽略损坏的设置 */ }
+}
+
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* 忽略 */ }
+}
+
+function applySettings() {
+  document.body.classList.toggle('no-minimap', !settings.minimap);
+  document.getElementById('fps').classList.toggle('hidden', !settings.fps);
+  document.querySelectorAll('[data-setting]').forEach(b => {
+    b.classList.toggle('on', !!settings[b.dataset.setting]);
+  });
+  document.querySelectorAll('[data-quality]').forEach(b => {
+    b.classList.toggle('active', b.dataset.quality === settings.quality);
+  });
+  if (document.getElementById('kingdom-list')) renderKingdomList();
+  if (world && world.laws) {
+    document.querySelectorAll('[data-law]').forEach(b => {
+      b.classList.toggle('on', !!world.laws[b.dataset.law]);
+    });
+  }
+}
+
 const rand = (a, b) => a + Math.random() * (b - a);
+const drawList = [];
+let lastTerritoryAt = 0;
 const pick = arr => arr[(Math.random() * arr.length) | 0];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
@@ -309,6 +356,73 @@ function redrawRegion(x0, y0, x1, y1) {
   for (let y = ay; y <= by; y++) {
     for (let x = ax; x <= bx; x++) drawGroundTile(x, y);
   }
+}
+
+/* ---------------- territory ---------------- */
+
+function markTerritoryDirty() {
+  if (world) world.territoryDirty = true;
+}
+
+function rebuildTerritory() {
+  const terr = world.territory;
+  const villages = world.villages;
+  terr.fill(0);
+
+  for (let ty = 0; ty < H; ty++) {
+    for (let tx = 0; tx < W; tx++) {
+      const i = tileIdx(tx, ty);
+      if (world.terrain[i] === T_WATER) continue;
+      let best = -1, bd = Infinity;
+      for (const v of villages) {
+        const nx = Math.min(17, Math.round(v.radius) + 3);
+        const dx = tx - v.tx, dy = ty - v.ty;
+        const d = dx * dx + dy * dy;
+        if (d > nx * nx) continue;
+        if (d < bd) { bd = d; best = v.faction; }
+      }
+      if (best >= 0) terr[i] = best + 1;
+    }
+  }
+
+  if (!territoryCanvas) {
+    territoryCanvas = document.createElement('canvas');
+    territoryCtx = territoryCanvas.getContext('2d');
+  }
+  territoryCanvas.width = W * TILE;
+  territoryCanvas.height = H * TILE;
+  territoryCtx.clearRect(0, 0, territoryCanvas.width, territoryCanvas.height);
+
+  for (let ty = 0; ty < H; ty++) {
+    for (let tx = 0; tx < W; tx++) {
+      const i = tileIdx(tx, ty);
+      const o = terr[i];
+      if (!o) continue;
+      const color = FACTIONS[o - 1].color;
+      territoryCtx.globalAlpha = 0.085;
+      territoryCtx.fillStyle = color;
+      territoryCtx.fillRect(tx * TILE, ty * TILE, TILE, TILE);
+
+      territoryCtx.globalAlpha = 0.8;
+      territoryCtx.strokeStyle = color;
+      territoryCtx.lineWidth = 2;
+      const x0 = tx * TILE, y0 = ty * TILE;
+      if (ty === 0 || terr[i - W] !== o) {
+        territoryCtx.beginPath(); territoryCtx.moveTo(x0, y0); territoryCtx.lineTo(x0 + TILE, y0); territoryCtx.stroke();
+      }
+      if (ty === H - 1 || terr[i + W] !== o) {
+        territoryCtx.beginPath(); territoryCtx.moveTo(x0, y0 + TILE); territoryCtx.lineTo(x0 + TILE, y0 + TILE); territoryCtx.stroke();
+      }
+      if (tx === 0 || terr[i - 1] !== o) {
+        territoryCtx.beginPath(); territoryCtx.moveTo(x0, y0); territoryCtx.lineTo(x0, y0 + TILE); territoryCtx.stroke();
+      }
+      if (tx === W - 1 || terr[i + 1] !== o) {
+        territoryCtx.beginPath(); territoryCtx.moveTo(x0 + TILE, y0); territoryCtx.lineTo(x0 + TILE, y0 + TILE); territoryCtx.stroke();
+      }
+    }
+  }
+  territoryCtx.globalAlpha = 1;
+  world.territoryDirty = false;
 }
 
 /* ---------------- units ---------------- */
@@ -524,13 +638,15 @@ function addHouse(village, tx, ty) {
   };
   world.houses.push(h);
   village.houses.push(h);
+  markTerritoryDirty();
   return h;
 }
 
 function removeHouse(h) {
   world.houses = world.houses.filter(x => x !== h);
-  const v = world.villages.find(vv => vv.id === h.villageId);
+  const v = world.villageMap.get(h.villageId);
   if (v) v.houses = v.houses.filter(x => x !== h);
+  markTerritoryDirty();
 }
 
 function houseAt(tx, ty) {
@@ -597,6 +713,8 @@ function placeVillage(tx, ty, factionId, silent = false) {
     bornYear: world.year
   };
   world.villages.push(v);
+  world.villageMap.set(v.id, v);
+  markTerritoryDirty();
 
   const k = world.kingdoms[factionId];
   if (!k.capital) {
@@ -619,6 +737,8 @@ function placeVillage(tx, ty, factionId, silent = false) {
 
 function removeVillage(v) {
   world.villages = world.villages.filter(x => x !== v);
+  world.villageMap.delete(v.id);
+  markTerritoryDirty();
   const k = world.kingdoms[v.faction];
   k.villages = k.villages.filter(id => id !== v.id);
   if (k.capital === v.id) k.capital = k.villages[0] !== undefined ? k.villages[0] : null;
@@ -702,7 +822,7 @@ function giftRelation(a, b, amount) {
 /* ---------------- effects ---------------- */
 
 function addEffect(path, x, y, size, life, opts = {}) {
-  if (world.effects.length > 320) world.effects.shift();
+  if (world.effects.length >= (EFFECT_CAP[settings.quality] || 260)) world.effects.shift();
   world.effects.push({
     img: img(path), x, y, size,
     life, maxLife: life,
@@ -823,6 +943,17 @@ function fireSpreadTick(dt) {
 function simTick(dt) {
   if (!world) return;
   world.time += dt;
+
+  for (const key in state.cds) {
+    if (state.cds[key] > 0) state.cds[key] = Math.max(0, state.cds[key] - dt);
+  }
+
+  world.warFactions = new Set();
+  for (const key of world.wars) {
+    const dash = key.indexOf('-');
+    world.warFactions.add(Number(key.slice(0, dash)));
+    world.warFactions.add(Number(key.slice(dash + 1)));
+  }
 
   const year = Math.floor(world.time / 20) + 1;
   if (year !== world.year) {
@@ -959,7 +1090,7 @@ function think(u) {
     }
   }
 
-  const home = u.homeVillage ? world.villages.find(v => v.id === u.homeVillage) : null;
+  const home = u.homeVillage ? world.villageMap.get(u.homeVillage) : null;
 
   if (u.kind === 'monster' || u.kind === 'beast') {
     const enemy = findEnemy(u, 170);
@@ -976,8 +1107,7 @@ function think(u) {
     return;
   }
 
-  const wars = [...world.wars].filter(k => k.split('-').map(Number).includes(u.faction));
-  const atWarNow = wars.length > 0;
+  const atWarNow = world.warFactions.has(u.faction);
 
   if (u.job === 'king') {
     const enemy = findEnemy(u, 140);
@@ -1008,9 +1138,12 @@ function think(u) {
     }
     u.target = null;
     if (atWarNow) {
-      const enemyV = world.villages
-        .filter(v => v.faction !== u.faction && atWar(u.faction, v.faction))
-        .sort((a, b) => dist2(u.x, u.y, a.tx * TILE, a.ty * TILE) - dist2(u.x, u.y, b.tx * TILE, b.ty * TILE))[0];
+      let enemyV = null, nd = Infinity;
+      for (const v of world.villages) {
+        if (v.faction === u.faction || !atWar(u.faction, v.faction)) continue;
+        const d = dist2(u.x, u.y, v.tx * TILE, v.ty * TILE);
+        if (d < nd) { nd = d; enemyV = v; }
+      }
       if (enemyV) {
         const h = world.houses.find(hh => hh.villageId === enemyV.id);
         if (h && dist2(u.x, u.y, h.tx * TILE + 8, h.ty * TILE + 8) < 20 * 20) {
@@ -1125,28 +1258,50 @@ function moveUnit(u, dt) {
 }
 
 function updateVillages(dt) {
+  const groups = new Map();
+  for (const u of world.units) {
+    if (u.dead || u.homeVillage === null) continue;
+    let g = groups.get(u.homeVillage);
+    if (!g) {
+      g = { members: [], farmers: 0, builders: 0, soldiers: 0 };
+      groups.set(u.homeVillage, g);
+    }
+    g.members.push(u);
+    if (u.job === 'farmer') g.farmers++;
+    else if (u.job === 'builder') g.builders++;
+    else if (u.job === 'soldier') g.soldiers++;
+  }
+
+  const warCount = [0, 0, 0, 0];
+  for (const key of world.wars) {
+    const dash = key.indexOf('-');
+    warCount[Number(key.slice(0, dash))]++;
+    warCount[Number(key.slice(dash + 1))]++;
+  }
+
   for (const v of [...world.villages]) {
-    const members = world.units.filter(u => !u.dead && u.homeVillage === v.id);
+    const g = groups.get(v.id) || { members: [], farmers: 0, builders: 0, soldiers: 0 };
+    const members = g.members;
+    const farmers = g.farmers, builders = g.builders, soldiers = g.soldiers;
     v.pop = members.length;
-    const farmers = members.filter(u => u.job === 'farmer').length;
-    const builders = members.filter(u => u.job === 'builder').length;
-    const soldiers = members.filter(u => u.job === 'soldier').length;
 
     v.food = Math.max(0, Math.min(120, v.food - v.pop * 0.038 * dt));
     v.wood = Math.min(90, v.wood + (builders * 0.02) * dt);
     v.stone = Math.min(60, v.stone + 0.01 * dt);
 
-    const wars = [...world.wars].filter(k => k.split('-').map(Number).includes(v.faction)).length;
+    const wars = warCount[v.faction];
     const targetHappy = clamp(46 + Math.min(26, v.food * 0.28) + v.houses.length * 1.6 - wars * 12, 5, 96);
     v.happiness += (targetHappy - v.happiness) * Math.min(1, dt * 0.15);
 
-    v.radius = 6 + Math.min(9, v.houses.length * 0.6);
+    const newRadius = 6 + Math.min(9, v.houses.length * 0.6);
+    if (Math.abs(newRadius - v.radius) > 0.05) markTerritoryDirty();
+    v.radius = newRadius;
     v.spawnCd -= dt;
     v.buildCd -= dt;
     v.soldierCd -= dt;
 
     const cap = 3 + v.houses.length * 3;
-    if (v.pop < cap && v.food >= 8 && v.happiness > 36 && v.spawnCd <= 0) {
+    if (world.laws.growth && v.pop < cap && v.food >= 8 && v.happiness > 36 && v.spawnCd <= 0) {
       spawnVillager(v);
       v.food -= 5;
       v.spawnCd = rand(5, 9);
@@ -1374,7 +1529,7 @@ function yearlyEvent() {
         continue;
       }
       const r = relation(a, b);
-      if (!allied(a, b) && r < -50 && Math.random() < 0.32) {
+      if (!allied(a, b) && r < -50 && world.laws.autoWar && Math.random() < 0.32) {
         declareWar(a, b, true);
       } else if (!allied(a, b) && r > 60 && Math.random() < 0.28) {
         formAlliance(a, b, true);
@@ -1385,7 +1540,7 @@ function yearlyEvent() {
   }
 
   // 国家开拓新村庄
-  for (const k of world.kingdoms) {
+  if (world.laws.growth) for (const k of world.kingdoms) {
     if (k.villages.length === 0 || k.villages.length >= 5 || world.villages.length >= 12) continue;
     if (Math.random() > 0.17) continue;
     const home = world.villages.find(v => v.id === pick(k.villages));
@@ -1403,39 +1558,47 @@ function yearlyEvent() {
     }
   }
 
-  const roll = Math.random();
-  if (roll < 0.14 && world.villages.length > 0) {
-    const v = pick(world.villages);
-    const spot = findOpenSpot(v.tx, v.ty, 8, 16);
-    if (spot) spawnBeast(spot.tx, spot.ty);
-  } else if (roll < 0.22) {
-    for (let i = 0; i < 6; i++) {
-      const tx = (Math.random() * W) | 0;
-      const ty = (Math.random() * H) | 0;
-      if (isLand(tx, ty)) { spawnMonster(tx, ty); break; }
+  if (world.laws.disasters) {
+    const roll = Math.random();
+    if (roll < 0.14 && world.villages.length > 0) {
+      const v = pick(world.villages);
+      const spot = findOpenSpot(v.tx, v.ty, 8, 16);
+      if (spot) spawnBeast(spot.tx, spot.ty);
+    } else if (roll < 0.22) {
+      for (let i = 0; i < 6; i++) {
+        const tx = (Math.random() * W) | 0;
+        const ty = (Math.random() * H) | 0;
+        if (isLand(tx, ty)) { spawnMonster(tx, ty); break; }
+      }
+    } else if (roll < 0.32) {
+      ambientLine();
     }
-  } else if (roll < 0.32) {
-    const lines = [
-      '海风吹过群岛，卷起一层薄雾。',
-      '林间的鸟兽比往年更安静了。',
-      '远方的商队带来了陌生的歌谣。',
-      '有人在夜里看见山脊上亮起微光。',
-      '集市上开始流通新的铜币。'
-    ];
-    log(pick(lines));
+  } else if (Math.random() < 0.14) {
+    ambientLine();
   }
 
-  if (Math.random() < 0.05 && world.villages.length > 0) {
+  if (world.laws.disasters && Math.random() < 0.05 && world.villages.length > 0) {
     const v = pick(world.villages);
     const spot = findOpenSpot(v.tx, v.ty, 5, 12);
     if (spot) igniteTile(spot.tx, spot.ty);
   }
 }
 
+function ambientLine() {
+  log(pick([
+    '海风吹过群岛，卷起一层薄雾。',
+    '林间的鸟兽比往年更安静了。',
+    '远方的商队带来了陌生的歌谣。',
+    '有人在夜里看见山脊上亮起微光。',
+    '集市上开始流通新的铜币。'
+  ]));
+}
+
 /* ---------------- god tools ---------------- */
 
 const CONTINUOUS = new Set(['land', 'water', 'sand', 'forest', 'rock', 'human', 'beast', 'monster', 'zombie', 'fire', 'plague', 'acid', 'heal', 'bless', 'clear']);
 const ACTIONS = new Set(['lightning', 'meteor', 'tornado', 'earthquake', 'volcano', 'village', 'war']);
+const POWER_CD = { lightning: 1.5, meteor: 5, tornado: 9, earthquake: 11, volcano: 14 };
 
 function applyAction(tool, tx, ty) {
   const px = tx * TILE + 8, py = ty * TILE + 8;
@@ -1822,6 +1985,7 @@ function updateHUD() {
   const warEl = document.getElementById('stat-war');
   warEl.textContent = wars > 0 ? '战争 ' + wars : '和平';
   warEl.classList.toggle('hot', wars > 0);
+  updateCooldownBadges();
 }
 
 /* ---------------- toolbar ---------------- */
@@ -1852,7 +2016,7 @@ function buildTools() {
   const wrap = document.getElementById('tools');
   wrap.innerHTML = group.tools.map(t =>
     `<button class="tool ${t.id === state.tool ? 'active' : ''}" data-tool="${t.id}" title="${t.hint}">
-      <img src="assets/${t.icon}" alt="${t.name}"><span>${t.name}</span>
+      <img src="assets/${t.icon}" alt="${t.name}"><span>${t.name}</span><em class="cd"></em>
     </button>`
   ).join('');
 
@@ -1872,6 +2036,24 @@ function updateToolState() {
   const brushRow = document.querySelector('.brush-row');
   const usable = CONTINUOUS.has(state.tool);
   brushRow.classList.toggle('disabled', !usable);
+  updateCooldownBadges();
+}
+
+function updateCooldownBadges() {
+  const wrap = document.getElementById('tools');
+  if (!wrap) return;
+  wrap.querySelectorAll('.tool').forEach(btn => {
+    const cd = POWER_CD[btn.dataset.tool];
+    const left = cd ? (state.cds[btn.dataset.tool] || 0) : 0;
+    const badge = btn.querySelector('.cd');
+    if (left > 0.05) {
+      btn.classList.add('cooling');
+      if (badge) badge.textContent = left.toFixed(1);
+    } else {
+      btn.classList.remove('cooling');
+      if (badge) badge.textContent = '';
+    }
+  });
 }
 
 /* ---------------- inspector ---------------- */
@@ -2193,6 +2375,7 @@ function serializeWorld() {
     wars: [...world.wars],
     allies: [...world.allies],
     warTimers: world.warTimers,
+    laws: world.laws,
     kingdoms: world.kingdoms.map(k => ({ id: k.id, capital: k.capital, villages: k.villages.slice(), king: k.king }))
   };
 }
@@ -2207,6 +2390,10 @@ function deserializeWorld(data) {
     houses: [],
     units: [],
     villages: data.villages.map(v => ({ ...v, houses: [] })),
+    villageMap: new Map(),
+    laws: data.laws || { autoWar: true, disasters: true, growth: true },
+    territory: new Uint8Array(W * H),
+    territoryDirty: true,
     effects: [],
     decals: [],
     fires: data.fires || [],
@@ -2237,6 +2424,8 @@ function deserializeWorld(data) {
     const u = { ...raw, img: img(raw.imgPath || `units/${raw.sprite}.png`), target: null, hasTarget: false, dead: false, moving: false, atkCd: 0, thinkCd: 0.2, workCd: 0 };
     world.units.push(u);
   }
+  for (const v of world.villages) world.villageMap.set(v.id, v);
+  world.territoryDirty = true;
 
   terrainCanvas = terrainCanvas || document.createElement('canvas');
   terrainCtx = terrainCanvas.getContext('2d');
@@ -2405,7 +2594,13 @@ function useToolAt(wx, wy) {
     return;
   }
   if (ACTIONS.has(state.tool)) {
+    const cd = POWER_CD[state.tool];
+    if (cd && (state.cds[state.tool] || 0) > 0) {
+      toast(`${TOOL_INFO[state.tool].name}还需 ${(state.cds[state.tool]).toFixed(1)} 秒`);
+      return;
+    }
     applyAction(state.tool, tx, ty);
+    if (cd) state.cds[state.tool] = cd;
     return;
   }
   if (CONTINUOUS.has(state.tool)) {
@@ -2519,9 +2714,13 @@ function bindInput() {
     else if (k === '-') { state.brush = clamp(state.brush - 1, 1, 10); updateToolState(); }
     else if (k === 's' || k === 'l') openSaveMenu();
     else if (k === 'f') screenshot();
+    else if (k === 'k') openKingdoms();
+    else if (k === 'o') openSettings();
     else if (k === 'escape') {
       document.getElementById('help').classList.add('hidden');
       document.getElementById('save-menu').classList.add('hidden');
+      document.getElementById('settings-menu').classList.add('hidden');
+      document.getElementById('kingdom-menu').classList.add('hidden');
       clearSelection();
     }
     else if (k === 'arrowleft' || k === 'a') { cam.x -= 46 / cam.zoom; clampCamera(); }
@@ -2545,7 +2744,7 @@ let dpr = Math.min(2, window.devicePixelRatio || 1);
 
 function resizeCanvas() {
   const cvs = document.getElementById('world');
-  dpr = Math.min(2, window.devicePixelRatio || 1);
+  dpr = Math.min(QUALITY_DPR[settings.quality] || 2, window.devicePixelRatio || 1);
   cvs.width = Math.floor(window.innerWidth * dpr);
   cvs.height = Math.floor(window.innerHeight * dpr);
   clampCamera();
@@ -2592,6 +2791,14 @@ function drawUnit(u) {
     ctx.drawImage(img('icons/star.png'), u.x - 5, py - 12, 10, 10);
   }
 
+  if (settings.hpBars && u.hp < u.maxHp && u.hp > 0) {
+    const w = 14, x = u.x - w / 2, y = py - 4;
+    ctx.fillStyle = 'rgba(10,6,3,0.75)';
+    ctx.fillRect(x, y, w, 2.5);
+    ctx.fillStyle = u.faction !== null ? FACTIONS[u.faction].color : '#d9594c';
+    ctx.fillRect(x, y, w * clamp(u.hp / u.maxHp, 0, 1), 2.5);
+  }
+
   if (u === state.hoverUnit && u !== state.selectedUnit) {
     ctx.globalAlpha = 0.55;
     ctx.drawImage(img('effects/fx/circle_02.png'), u.x - 11, u.y - 10, 22, 22);
@@ -2599,9 +2806,10 @@ function drawUnit(u) {
   }
 }
 
-function drawEffects() {
+function drawEffects(vb) {
   const ctx = ctxState.ctx;
   for (const d of world.decals) {
+    if (d.x < vb.x0 || d.x > vb.x1 || d.y < vb.y0 || d.y > vb.y1) continue;
     const a = clamp(d.life / d.maxLife, 0, 1);
     ctx.globalAlpha = 0.45 * a;
     ctx.drawImage(d.img, d.x - d.size / 2, d.y - d.size / 2, d.size, d.size);
@@ -2609,18 +2817,20 @@ function drawEffects() {
   ctx.globalAlpha = 1;
 
   for (const e of world.effects) {
+    if (e.x < vb.x0 || e.x > vb.x1 || e.y < vb.y0 || e.y > vb.y1) continue;
     const t = clamp(e.life / e.maxLife, 0, 1);
-    ctx.save();
     ctx.globalAlpha = Math.min(1, t * 1.5);
     if (e.rot !== 0) {
+      ctx.save();
       ctx.translate(e.x, e.y);
       ctx.rotate(e.rot);
       ctx.drawImage(e.img, -e.size / 2, -e.size / 2, e.size, e.size);
+      ctx.restore();
     } else {
       ctx.drawImage(e.img, e.x - e.size / 2, e.y - e.size / 2, e.size, e.size);
     }
-    ctx.restore();
   }
+  ctx.globalAlpha = 1;
 
   if (world.tornado) {
     const t = world.tornado;
@@ -2661,8 +2871,8 @@ function drawBrush() {
 
 function render() {
   const cvs = document.getElementById('world');
-  const ctx = cvs.getContext('2d');
-  ctxState.ctx = ctx;
+  if (!ctxState.ctx) ctxState.ctx = cvs.getContext('2d');
+  const ctx = ctxState.ctx;
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
@@ -2680,7 +2890,29 @@ function render() {
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cam.x, -cam.y);
 
-  ctx.drawImage(terrainCanvas, 0, 0);
+  const inv = 1 / cam.zoom;
+  const vb = {
+    x0: cam.x - window.innerWidth * 0.5 * inv - 40,
+    x1: cam.x + window.innerWidth * 0.5 * inv + 40,
+    y0: cam.y - window.innerHeight * 0.5 * inv - 90,
+    y1: cam.y + window.innerHeight * 0.5 * inv + 70
+  };
+
+  const sx = clamp(Math.floor(vb.x0 / TILE) * TILE, 0, W * TILE);
+  const sy = clamp(Math.floor(vb.y0 / TILE) * TILE, 0, H * TILE);
+  const sw = clamp(Math.ceil(vb.x1 / TILE) * TILE, 0, W * TILE) - sx;
+  const sh = clamp(Math.ceil(vb.y1 / TILE) * TILE, 0, H * TILE) - sy;
+  if (sw > 0 && sh > 0) ctx.drawImage(terrainCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+
+  if (settings.borders) {
+    if (world.territoryDirty) {
+      rebuildTerritory();
+      lastTerritoryAt = performance.now();
+    }
+    if (territoryCanvas && sw > 0 && sh > 0) {
+      ctx.drawImage(territoryCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+    }
+  }
 
   if (state.selectedVillage) {
     const v = state.selectedVillage;
@@ -2690,23 +2922,60 @@ function render() {
     ctx.globalAlpha = 1;
   }
 
-  for (const tree of world.trees.values()) drawTree(tree);
-  for (const h of world.houses) drawHouse(h);
+  for (const tree of world.trees.values()) {
+    const tx = tree.x * TILE, ty = tree.y * TILE;
+    if (tx < vb.x0 || tx > vb.x1 || ty < vb.y0 || ty > vb.y1) continue;
+    drawTree(tree);
+  }
+  for (const h of world.houses) {
+    const hx = h.tx * TILE, hy = h.ty * TILE;
+    if (hx < vb.x0 || hx > vb.x1 || hy < vb.y0 || hy > vb.y1) continue;
+    drawHouse(h);
+  }
 
-  const sorted = world.units.filter(u => !u.dead).sort((a, b) => a.y - b.y);
-  for (const u of sorted) drawUnit(u);
+  drawList.length = 0;
+  for (const u of world.units) {
+    if (u.dead || u.x < vb.x0 || u.x > vb.x1 || u.y < vb.y0 || u.y > vb.y1) continue;
+    drawList.push(u);
+  }
+  drawList.sort((a, b) => a.y - b.y);
+  for (const u of drawList) drawUnit(u);
+
+  if (settings.names && cam.zoom > 0.55) drawVillageNames(vb);
 
   if (state.selectedUnit && !state.selectedUnit.dead) {
     const u = state.selectedUnit;
-    ctx.globalAlpha = 0.8;
-    ctx.drawImage(img('effects/fx/circle_02.png'), u.x - 13, u.y - 12, 26, 26);
-    ctx.globalAlpha = 1;
+    if (u.x >= vb.x0 && u.x <= vb.x1 && u.y >= vb.y0 && u.y <= vb.y1) {
+      ctx.globalAlpha = 0.8;
+      ctx.drawImage(img('effects/fx/circle_02.png'), u.x - 13, u.y - 12, 26, 26);
+      ctx.globalAlpha = 1;
+    }
   }
 
-  drawEffects();
+  drawEffects(vb);
   drawBrush();
 
   ctx.restore();
+}
+
+function drawVillageNames(vb) {
+  const ctx = ctxState.ctx;
+  ctx.font = '600 12px "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  for (const v of world.villages) {
+    const x = v.tx * TILE + 8;
+    const y = v.ty * TILE - 24;
+    if (x < vb.x0 || x > vb.x1 || y < vb.y0 || y > vb.y1) continue;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(10,6,3,0.85)';
+    ctx.strokeText(v.name, x, y);
+    ctx.fillStyle = v.capital ? '#f5e2b8' : '#e7d3ab';
+    ctx.fillText(v.name, x, y);
+  }
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 /* ---------------- world creation ---------------- */
@@ -2725,6 +2994,7 @@ function newWorld(seed) {
     houses: [],
     units: [],
     villages: [],
+    villageMap: new Map(),
     effects: [],
     decals: [],
     fires: [],
@@ -2735,6 +3005,9 @@ function newWorld(seed) {
     wars: new Set(),
     allies: new Set(),
     warTimers: {},
+    laws: { autoWar: true, disasters: true, growth: true },
+    territory: new Uint8Array(W * H),
+    territoryDirty: true,
     kingdoms: FACTIONS.map((f, i) => ({ id: i, capital: null, villages: [], king: null }))
   };
 
@@ -2791,6 +3064,8 @@ function newWorld(seed) {
   state.tool = 'land';
   state.cat = 'terrain';
   state.brush = 2;
+  state.cds = {};
+  lastTerritoryAt = 0;
   state.selectedUnit = null;
   state.selectedVillage = null;
   state.selectedTile = null;
@@ -2821,6 +3096,131 @@ function openSaveMenu() {
   document.getElementById('save-menu').classList.remove('hidden');
 }
 
+/* ---------------- settings & kingdom list ---------------- */
+
+function openSettings() {
+  applySettings();
+  document.getElementById('settings-menu').classList.remove('hidden');
+}
+
+function openKingdoms() {
+  renderKingdomList();
+  document.getElementById('kingdom-menu').classList.remove('hidden');
+}
+
+function renderKingdomList() {
+  const wrap = document.getElementById('kingdom-list');
+  if (!wrap || !world) return;
+  if (state.listTab === 'villages') {
+    wrap.innerHTML = renderVillageRows();
+  } else if (state.listTab === 'units') {
+    wrap.innerHTML = renderUnitRows();
+  } else {
+    wrap.innerHTML = renderKingdomRows();
+  }
+}
+
+function renderKingdomRows() {
+  const rows = [];
+  for (const k of world.kingdoms) {
+    const villages = world.villages.filter(v => v.faction === k.id);
+    if (!villages.length) continue;
+    const f = FACTIONS[k.id];
+    let pop = 0;
+    for (const u of world.units) {
+      if (u.dead || u.homeVillage === null) continue;
+      const hv = world.villageMap.get(u.homeVillage);
+      if (hv && hv.faction === k.id) pop++;
+    }
+    const wars = [...world.wars].filter(key => key.split('-').map(Number).includes(k.id)).length;
+    const allies = [...world.allies].filter(key => key.split('-').map(Number).includes(k.id)).length;
+    const stateText = wars > 0 ? `交战 ${wars}` : allies > 0 ? `同盟 ${allies}` : '和平';
+    const stateClass = wars > 0 ? 'war' : allies > 0 ? 'ally' : '';
+    const cap = k.capital ? world.villageMap.get(k.capital) : villages[0];
+    rows.push(`
+      <div class="kingdom-row">
+        <span class="kflag" style="background:${f.color};color:${f.color}"></span>
+        <div class="kmain">
+          <div class="kname">${f.name}</div>
+          <div class="kmeta">${villages.length} 座村庄 · ${pop} 人 · 王都 ${cap ? cap.name : '无'}</div>
+        </div>
+        <span class="kstate ${stateClass}">${stateText}</span>
+        <button class="ghost-btn mini" data-view="${k.id}">查看</button>
+      </div>
+    `);
+  }
+  return rows.length ? rows.join('') : '<div class="set-hint">世界上还没有成形的国家。</div>';
+}
+
+function renderVillageRows() {
+  const rows = [];
+  for (const v of world.villages) {
+    const f = FACTIONS[v.faction];
+    rows.push(`
+      <div class="kingdom-row">
+        <span class="kflag" style="background:${f.color};color:${f.color}"></span>
+        <div class="kmain">
+          <div class="kname">${v.name}</div>
+          <div class="kmeta">${f.name} · ${v.pop} 人 · ${v.houses.length} 房屋 · 粮食 ${Math.round(v.food)}</div>
+        </div>
+        <span class="kstate">${v.capital ? '王都' : '村庄'}</span>
+        <button class="ghost-btn mini" data-village="${v.id}">查看</button>
+      </div>
+    `);
+  }
+  return rows.length ? rows.join('') : '<div class="set-hint">还没有村庄。</div>';
+}
+
+function renderUnitRows() {
+  const units = world.units.filter(u => !u.dead && u.kind === 'villager').slice(0, 80);
+  const rows = units.map(u => {
+    const f = u.faction !== null ? FACTIONS[u.faction] : null;
+    return `
+      <div class="kingdom-row">
+        <span class="kflag" style="background:${f ? f.color : '#8d724d'};color:${f ? f.color : '#8d724d'}"></span>
+        <div class="kmain">
+          <div class="kname">${unitDisplayName(u)}</div>
+          <div class="kmeta">${f ? f.name : '无阵营'} · ${u.king ? '国王' : (JOB_NAMES[u.job] || '平民')} · ${Math.ceil(u.hp)}/${Math.round(u.maxHp)} 生命</div>
+        </div>
+        <button class="ghost-btn mini" data-unit="${u.id}">查看</button>
+      </div>
+    `;
+  });
+  return rows.length ? rows.join('') : '<div class="set-hint">世界上还没有居民。</div>';
+}
+
+function viewKingdom(id) {
+  const k = world.kingdoms[id];
+  if (!k) return;
+  const cap = k.capital ? world.villageMap.get(k.capital) : world.villages.find(v => v.faction === id);
+  if (!cap) return;
+  centerOn(cap.tx * TILE + 8, cap.ty * TILE + 8);
+  document.getElementById('kingdom-menu').classList.add('hidden');
+  showVillage(cap);
+}
+
+function viewVillageById(id) {
+  const v = world.villageMap.get(id);
+  if (!v) return;
+  centerOn(v.tx * TILE + 8, v.ty * TILE + 8);
+  document.getElementById('kingdom-menu').classList.add('hidden');
+  showVillage(v);
+}
+
+function viewUnitById(id) {
+  const u = world.units.find(x => x.id === id && !x.dead);
+  if (!u) return;
+  centerOn(u.x, u.y);
+  document.getElementById('kingdom-menu').classList.add('hidden');
+  showUnit(u);
+}
+
+function centerOn(x, y) {
+  cam.x = x;
+  cam.y = y;
+  clampCamera();
+}
+
 /* ---------------- boot ---------------- */
 
 function bindButtons() {
@@ -2847,6 +3247,55 @@ function bindButtons() {
     e.target.value = '';
   });
   document.getElementById('btn-shot').addEventListener('click', screenshot);
+
+  document.getElementById('btn-kingdoms').addEventListener('click', openKingdoms);
+  document.getElementById('btn-kingdom-close').addEventListener('click', () => document.getElementById('kingdom-menu').classList.add('hidden'));
+  document.querySelectorAll('[data-list]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.listTab = btn.dataset.list;
+      document.querySelectorAll('[data-list]').forEach(b => b.classList.toggle('active', b === btn));
+      renderKingdomList();
+    });
+  });
+  document.getElementById('kingdom-list').addEventListener('click', e => {
+    const kbtn = e.target.closest('button[data-view]');
+    if (kbtn) { viewKingdom(Number(kbtn.dataset.view)); return; }
+    const vbtn = e.target.closest('button[data-village]');
+    if (vbtn) { viewVillageById(Number(vbtn.dataset.village)); return; }
+    const ubtn = e.target.closest('button[data-unit]');
+    if (ubtn) viewUnitById(Number(ubtn.dataset.unit));
+  });
+
+  document.getElementById('btn-settings').addEventListener('click', openSettings);
+  document.getElementById('btn-settings-close').addEventListener('click', () => document.getElementById('settings-menu').classList.add('hidden'));
+  document.querySelectorAll('[data-setting]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.setting;
+      settings[key] = !settings[key];
+      saveSettings();
+      applySettings();
+      if (key === 'minimap' && settings.minimap) drawMinimap();
+    });
+  });
+  document.querySelectorAll('[data-quality]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      settings.quality = btn.dataset.quality;
+      saveSettings();
+      applySettings();
+      resizeCanvas();
+      toast(`画质已切换为${btn.textContent}`);
+    });
+  });
+  document.querySelectorAll('[data-law]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!world.laws) return;
+      const key = btn.dataset.law;
+      world.laws[key] = !world.laws[key];
+      applySettings();
+      const names = { autoWar: '自动战争', disasters: '天灾事件', growth: '自然繁衍' };
+      toast(`${names[key]}已${world.laws[key] ? '开启' : '关闭'}`);
+    });
+  });
 
   document.getElementById('btn-help').addEventListener('click', () => document.getElementById('help').classList.remove('hidden'));
   document.getElementById('btn-help-close').addEventListener('click', () => document.getElementById('help').classList.add('hidden'));
@@ -2880,8 +3329,10 @@ function bindButtons() {
 }
 
 function boot() {
+  loadSettings();
   resizeCanvas();
   newWorld();
+  applySettings();
   buildRail();
   buildTools();
   updateToolState();
@@ -2893,11 +3344,22 @@ function boot() {
 
   let last = performance.now();
   let acc = 0;
-  let hudAt = 0, miniAt = 0, inspAt = 0;
+  let hudAt = 0, miniAt = 0, inspAt = 0, hoverAt = 0, fpsAt = 0;
+  let fpsFrames = 0, fpsAccum = 0;
 
   function frame(ts) {
     const dt = Math.min(0.05, (ts - last) / 1000);
     last = ts;
+    fpsFrames++;
+    fpsAccum += dt;
+    if (ts - fpsAt > 500) {
+      const fps = Math.round(fpsFrames / Math.max(0.001, fpsAccum));
+      const el = document.getElementById('fps');
+      if (el) el.textContent = fps + ' FPS';
+      fpsAt = ts;
+      fpsFrames = 0;
+      fpsAccum = 0;
+    }
 
     if (state.speed > 0) {
       acc += dt * state.speed;
@@ -2922,12 +3384,12 @@ function boot() {
         updateInspector();
       }
     }
-    if (ts - miniAt > 600) {
+    if (settings.minimap && ts - miniAt > 600) {
       miniAt = ts;
       drawMinimap();
     }
-    if (ts - inspAt > 500) {
-      inspAt = ts;
+    if (ts - hoverAt > 500) {
+      hoverAt = ts;
       if (state.mouse.inside && state.tool === 'select') {
         const hit = pickAt(state.mouse.wx, state.mouse.wy);
         state.hoverUnit = hit.type === 'unit' ? hit.unit : null;
