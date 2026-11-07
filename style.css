@@ -436,6 +436,7 @@ body {
   #topbar { padding: 0 8px; gap: 6px; }
   .stat { padding: 4px 6px; gap: 4px; }
   .stat-label { display: none; }
+  .stats .stat:nth-child(4) { display: none; }
   .top-actions { gap: 4px; }
   .icon-btn { min-width: 30px; height: 30px; padding: 0 4px; }
   .icon-btn.wide { padding: 0 7px; letter-spacing: 1px; }
