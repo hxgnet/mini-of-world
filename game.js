@@ -1,8 +1,6 @@
-'use strict';
-
 /* =========================================================
    微尘世界 · 像素神明沙盒
-   所有画面元素均来自 Kenney.nl 的 CC0 像素素材
+   画面元素全部来自 Kenney.nl 的 CC0 像素素材
    ========================================================= */
 
 const TILE = 16;
@@ -19,6 +17,7 @@ const FACTIONS = [
 
 const CIV_SPRITES = ['villager_m', 'villager_f', 'villager_y', 'woman_b', 'woman_o'];
 const SOLDIER_SPRITES = ['knight1', 'knight2'];
+const JOB_NAMES = { farmer: '农夫', builder: '工匠', soldier: '战士', king: '国王', idle: '平民' };
 
 const MONSTER_DEFS = [
   { sprite: 'skeleton', hp: 34, dmg: 4.0, speed: 15, maxAge: 620 },
@@ -38,13 +37,12 @@ const SPRITE_NAMES = {
   villager_m: '村民', villager_f: '村民', villager_y: '少年', woman_b: '村民', woman_o: '村民',
   knight1: '战士', knight2: '战士',
   skeleton: '骷髅', goblin: '哥布林', mummy: '木乃伊', demon: '恶魔', slime: '史莱姆',
-  bat: '蝙蝠', spider: '蜘蛛', ghost: '幽灵'
+  bat: '蝙蝠', spider: '蜘蛛', ghost: '幽灵', zombie: '僵尸'
 };
 
 /* ---------------- assets ---------------- */
 
 const ASSETS = new Set();
-
 function addAsset(p) { ASSETS.add(p); }
 
 [
@@ -54,7 +52,7 @@ function addAsset(p) { ASSETS.add(p); }
   'terrain/edge_nw.png', 'terrain/edge_ne.png', 'terrain/edge_sw.png', 'terrain/edge_se.png',
   'nature/tree.png', 'nature/tree2.png', 'nature/tree3.png', 'nature/tree4.png',
   'nature/bush.png', 'nature/bush2.png', 'nature/deadtree.png', 'nature/cactus.png',
-  'units/skull.png', 'units/sword.png',
+  'units/skull.png', 'units/sword.png', 'units/zombie.png',
   'buildings/house_a.png', 'buildings/house_b.png',
   'effects/fx/flame_01.png', 'effects/fx/flame_02.png', 'effects/fx/flame_03.png',
   'effects/fx/flame_04.png', 'effects/fx/flame_05.png', 'effects/fx/flame_06.png',
@@ -63,7 +61,10 @@ function addAsset(p) { ASSETS.add(p); }
   'effects/fx/light_01.png', 'effects/fx/dirt_01.png', 'effects/fx/scorch_01.png',
   'effects/fx/scorch_dark.png', 'effects/fx/slash_01.png', 'effects/fx/circle_02.png',
   'effects/icons/ring.png', 'effects/icons/fire_aura.png', 'effects/icons/poison_aura.png',
-  'icons/target.png'
+  'effects/icons/spark.png', 'effects/icons/heal.png', 'effects/icons/meteor.png',
+  'effects/icons/bolt.png', 'effects/icons/fire.png',
+  'icons/target.png', 'icons/star.png', 'icons/warning.png', 'icons/trashcan.png',
+  'icons/checkmark.png', 'icons/power.png'
 ].forEach(addAsset);
 
 for (const f of FACTIONS) {
@@ -98,7 +99,8 @@ let terrainCtx = null;
 
 const cam = { x: 0, y: 0, zoom: 1.35 };
 const state = {
-  tool: 'select',
+  cat: 'terrain',
+  tool: 'land',
   brush: 2,
   speed: 1,
   lastSpeed: 1,
@@ -115,13 +117,14 @@ const state = {
   lastFxAt: 0,
   shake: 0,
   flash: 0,
-  logOpen: true
+  lastMinimap: 0
 };
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = arr => arr[(Math.random() * arr.length) | 0];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
+const pairKey = (a, b) => a < b ? a + '-' + b : b + '-' + a;
 
 /* ---------------- terrain helpers ---------------- */
 
@@ -197,7 +200,7 @@ function generateTerrain(seed) {
   const q = p => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
   const seaLevel = q(0.46);
   const beachLine = q(0.498);
-  const midLine = q(0.55);
+  const midLine = q(0.62);
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -206,12 +209,17 @@ function generateTerrain(seed) {
       let t;
       if (e < seaLevel) t = T_WATER;
       else if (e < beachLine) t = T_SAND;
-      else if (e > midLine && mtn[i] > 0.635) t = T_ROCK;
+      else if (e > midLine && mtn[i] > 0.66) t = T_ROCK;
       else t = T_GRASS;
 
       world.terrain[i] = t;
       const moist = fbm(x * 0.055 + 31, y * 0.055 + 17, seed + 9, 4);
-      world.variant[i] = (t === T_GRASS && moist > 0.53) ? 1 : 0;
+      if (t === T_GRASS && moist < 0.31) {
+        world.terrain[i] = T_SAND;
+        world.variant[i] = 0;
+      } else {
+        world.variant[i] = (t === T_GRASS && moist > 0.53) ? 1 : 0;
+      }
     }
   }
 }
@@ -229,9 +237,7 @@ function addTree(tx, ty, type) {
     dead: 'nature/deadtree.png',
     cactus: 'nature/cactus.png'
   };
-  world.trees.set(key, {
-    x: tx, y: ty, img: paths[type], burning: false, burnT: 0, hp: 18
-  });
+  world.trees.set(key, { x: tx, y: ty, img: paths[type], burning: false, burnT: 0, hp: 18 });
 }
 
 function scatterNature() {
@@ -245,10 +251,10 @@ function scatterNature() {
           return v < 0.52 ? 'tree' : v < 0.72 ? 'tree2' : v < 0.9 ? 'tree3' : 'tree4';
         };
         if (world.variant[i] === 1) {
-          if (Math.random() < 0.44) addTree(x, y, Math.random() < 0.86 ? pickTree() : (Math.random() < 0.5 ? 'bush' : 'bush2'));
-        } else if (Math.random() < 0.028) {
+          if (Math.random() < 0.27) addTree(x, y, Math.random() < 0.86 ? pickTree() : (Math.random() < 0.5 ? 'bush' : 'bush2'));
+        } else if (Math.random() < 0.017) {
           addTree(x, y, pickTree());
-        } else if (Math.random() < 0.03) {
+        } else if (Math.random() < 0.018) {
           addTree(x, y, Math.random() < 0.5 ? 'bush' : 'bush2');
         }
       } else if (t === T_SAND && Math.random() < 0.02) {
@@ -307,18 +313,28 @@ function redrawRegion(x0, y0, x1, y1) {
 
 /* ---------------- units ---------------- */
 
+function factionSpritePath(faction, sprite) {
+  return `units/faction/${FACTIONS[faction].key}/${sprite}.png`;
+}
+
 function makeUnit(opts) {
   const u = {
     id: world.nextId++,
     kind: 'villager',
     faction: null,
     sprite: 'villager_m',
+    imgPath: '',
     img: null,
+    job: 'idle',
     x: 0, y: 0,
-    hp: 24, maxHp: 24,
-    speed: 16, dmg: 3,
-    atkCd: 0, thinkCd: Math.random() * 0.4,
-    age: 0, maxAge: 600,
+    hp: 24,
+    maxHp: 24,
+    speed: 16,
+    dmg: 3,
+    atkCd: 0,
+    thinkCd: Math.random() * 0.4,
+    age: 0,
+    maxAge: 600,
     target: null,
     txPx: 0, tyPx: 0,
     hasTarget: false,
@@ -329,28 +345,35 @@ function makeUnit(opts) {
     infectedT: 0,
     phase: Math.random() * Math.PI * 2,
     dead: false,
-    moving: false
+    moving: false,
+    king: false,
+    workCd: 0
   };
   Object.assign(u, opts);
-  u.maxHp = u.hp;
-  if (!u.img) {
-    if (u.faction !== null && (u.kind === 'villager' || u.kind === 'soldier')) {
-      u.img = img(`units/faction/${FACTIONS[u.faction].key}/${u.sprite}.png`);
+  if (opts.maxHp !== undefined) u.maxHp = opts.maxHp;
+  else u.maxHp = opts.hp !== undefined ? opts.hp : u.hp;
+
+  if (!u.imgPath) {
+    if (u.faction !== null && (u.kind === 'villager' || u.kind === 'soldier' || u.kind === 'king')) {
+      u.imgPath = factionSpritePath(u.faction, u.sprite);
     } else {
-      u.img = img(`units/${u.sprite}.png`);
+      u.imgPath = `units/${u.sprite}.png`;
     }
   }
+  u.img = img(u.imgPath);
   world.units.push(u);
   return u;
 }
 
 function spawnVillager(village, opts = {}) {
   const pos = findOpenSpot(village.tx, village.ty, 1, 4) || { tx: village.tx, ty: village.ty };
-  const sprite = pick(CIV_SPRITES);
+  const r = Math.random();
+  const job = opts.job || (r < 0.5 ? 'farmer' : r < 0.72 ? 'builder' : 'idle');
   return makeUnit({
     kind: 'villager',
     faction: village.faction,
-    sprite,
+    sprite: pick(CIV_SPRITES),
+    job,
     x: pos.tx * TILE + 8 + rand(-2, 2),
     y: pos.ty * TILE + 12 + rand(-2, 2),
     hp: 26,
@@ -368,6 +391,7 @@ function spawnSoldier(village) {
     kind: 'soldier',
     faction: village.faction,
     sprite: pick(SOLDIER_SPRITES),
+    job: 'soldier',
     x: pos.tx * TILE + 8,
     y: pos.ty * TILE + 12,
     hp: 58,
@@ -379,12 +403,34 @@ function spawnSoldier(village) {
   });
 }
 
+function spawnKing(village) {
+  const k = world.kingdoms[village.faction];
+  const u = makeUnit({
+    kind: 'king',
+    faction: village.faction,
+    sprite: 'knight1',
+    job: 'king',
+    king: true,
+    x: village.tx * TILE + 8,
+    y: village.ty * TILE + 12,
+    hp: 190,
+    speed: 15,
+    dmg: 11,
+    maxAge: 99999,
+    age: 30,
+    homeVillage: village.id
+  });
+  u.img = img(factionSpritePath(village.faction, 'knight1'));
+  k.king = u.id;
+  return u;
+}
+
 function spawnHuman(tx, ty) {
-  const sprite = pick(CIV_SPRITES);
   return makeUnit({
     kind: 'villager',
     faction: null,
-    sprite,
+    sprite: pick(CIV_SPRITES),
+    job: 'idle',
     x: tx * TILE + 8 + rand(-6, 6),
     y: ty * TILE + 12 + rand(-6, 6),
     hp: 26,
@@ -427,6 +473,21 @@ function spawnBeast(tx, ty) {
   });
 }
 
+function spawnZombie(tx, ty) {
+  return makeUnit({
+    kind: 'monster',
+    faction: null,
+    sprite: 'zombie',
+    x: tx * TILE + 8 + rand(-6, 6),
+    y: ty * TILE + 12 + rand(-6, 6),
+    hp: 40,
+    speed: rand(10, 14),
+    dmg: 5,
+    maxAge: rand(400, 600),
+    age: 40
+  });
+}
+
 /* ---------------- villages & houses ---------------- */
 
 function findOpenSpot(cx, cy, minR, maxR) {
@@ -454,6 +515,7 @@ function addHouse(village, tx, ty) {
   const type = Math.random() < 0.5 ? 'a' : 'b';
   const h = {
     tx, ty,
+    imgPath: `buildings/faction_${f.key}_${type}.png`,
     img: img(`buildings/faction_${f.key}_${type}.png`),
     villageId: village.id,
     hp: 130,
@@ -520,31 +582,127 @@ function placeVillage(tx, ty, factionId, silent = false) {
     faction: factionId,
     name,
     tx, ty,
-    radius: 9,
+    radius: 7,
     houses: [],
-    food: 16,
-    spawnCd: 5,
-    buildCd: 7,
-    soldierCd: 8,
+    food: 32,
+    wood: 16,
+    stone: 4,
+    pop: 0,
+    happiness: 70,
+    capital: false,
+    spawnCd: rand(4, 9),
+    buildCd: rand(5, 10),
+    soldierCd: rand(6, 12),
+    kingCd: 0,
     bornYear: world.year
   };
   world.villages.push(v);
 
+  const k = world.kingdoms[factionId];
+  if (!k.capital) {
+    k.capital = v.id;
+    v.capital = true;
+  }
+  k.villages.push(v.id);
+
   for (let i = 0; i < 4; i++) spawnVillager(v);
   const spot = findOpenSpot(tx, ty, 0, 2) || { tx, ty };
   addHouse(v, spot.tx, spot.ty);
+  if (v.capital) spawnKing(v);
 
   if (!silent) {
-    log(`${f.name}部族建立了${name}。`, 'build');
+    log(`${f.name}建立了${name}。`, 'build');
     toast(`${name} 建立了`);
   }
   return v;
 }
 
+function removeVillage(v) {
+  world.villages = world.villages.filter(x => x !== v);
+  const k = world.kingdoms[v.faction];
+  k.villages = k.villages.filter(id => id !== v.id);
+  if (k.capital === v.id) k.capital = k.villages[0] !== undefined ? k.villages[0] : null;
+  if (state.selectedVillage === v) state.selectedVillage = null;
+}
+
+/* ---------------- kingdoms & diplomacy ---------------- */
+
+function kingdomOf(faction) { return world.kingdoms[faction]; }
+
+function activeKingdomIds() {
+  return world.kingdoms.filter(k => k.villages.length > 0).map(k => k.id);
+}
+
+function atWar(a, b) {
+  return world.wars.has(pairKey(a, b));
+}
+
+function allied(a, b) {
+  return world.allies.has(pairKey(a, b));
+}
+
+function relation(a, b) {
+  return world.rels[a][b];
+}
+
+function setRelation(a, b, v) {
+  const nv = clamp(Math.round(v), -100, 100);
+  world.rels[a][b] = nv;
+  world.rels[b][a] = nv;
+}
+
+function declareWar(a, b, quiet = false) {
+  if (a === b || a === null || b === null) return false;
+  if (atWar(a, b)) return false;
+  if (allied(a, b)) {
+    world.allies.delete(pairKey(a, b));
+  }
+  world.wars.add(pairKey(a, b));
+  world.warTimers[pairKey(a, b)] = rand(80, 150);
+  setRelation(a, b, -85);
+  log(`${FACTIONS[a].name}向${FACTIONS[b].name}宣战。`, 'war');
+  if (!quiet) { toast(`${FACTIONS[a].name} 对 ${FACTIONS[b].name} 宣战`); shake(7); }
+  for (const v of world.villages) {
+    if (v.faction === a || v.faction === b) {
+      spawnSoldier(v);
+      if (Math.random() < 0.4) spawnSoldier(v);
+    }
+  }
+  return true;
+}
+
+function makePeace(a, b, quiet = false) {
+  const key = pairKey(a, b);
+  if (!world.wars.has(key)) return false;
+  world.wars.delete(key);
+  delete world.warTimers[key];
+  setRelation(a, b, -30);
+  log(`${FACTIONS[a].name}与${FACTIONS[b].name}停战。`, 'diplo');
+  if (!quiet) toast('双方停战');
+  return true;
+}
+
+function formAlliance(a, b, quiet = false) {
+  if (a === b || atWar(a, b) || allied(a, b)) return false;
+  if (relation(a, b) < 35) {
+    if (!quiet) toast('关系太冷淡，无法结盟');
+    return false;
+  }
+  world.allies.add(pairKey(a, b));
+  setRelation(a, b, 80);
+  log(`${FACTIONS[a].name}与${FACTIONS[b].name}缔结同盟。`, 'diplo');
+  if (!quiet) toast('同盟达成');
+  return true;
+}
+
+function giftRelation(a, b, amount) {
+  setRelation(a, b, relation(a, b) + amount);
+}
+
 /* ---------------- effects ---------------- */
 
 function addEffect(path, x, y, size, life, opts = {}) {
-  if (world.effects.length > 280) world.effects.shift();
+  if (world.effects.length > 320) world.effects.shift();
   world.effects.push({
     img: img(path), x, y, size,
     life, maxLife: life,
@@ -556,7 +714,7 @@ function addEffect(path, x, y, size, life, opts = {}) {
 }
 
 function addDecal(path, px, py, size, life) {
-  if (world.decals.length > 220) world.decals.shift();
+  if (world.decals.length > 240) world.decals.shift();
   world.decals.push({ img: img(path), x: px, y: py, size, life, maxLife: life });
 }
 
@@ -579,7 +737,7 @@ function shake(amount) { state.shake = Math.max(state.shake, amount); }
 
 /* ---------------- fire ---------------- */
 
-function igniteTile(tx, ty, source) {
+function igniteTile(tx, ty) {
   const key = tx + ',' + ty;
   const tree = world.trees.get(key);
   if (tree && !tree.burning) { tree.burning = true; tree.burnT = rand(5, 9); }
@@ -621,9 +779,7 @@ function fireSpreadTick(dt) {
       const ny = f.ty + ((Math.random() * 3) | 0) - 1;
       const tree = world.trees.get(nx + ',' + ny);
       const house = houseAt(nx, ny);
-      if (tree || house) {
-        if (Math.random() < 0.55) igniteTile(nx, ny);
-      }
+      if ((tree || house) && Math.random() < 0.55) igniteTile(nx, ny);
     }
 
     if (f.life <= 0) {
@@ -655,8 +811,8 @@ function fireSpreadTick(dt) {
     }
     if (h.burnT <= 0 || h.hp <= 0) {
       addDecal('effects/fx/scorch_dark.png', h.tx * TILE + 8, h.ty * TILE + 8, 34, 60);
-      removeHouse(h);
       const v = world.villages.find(vv => vv.id === h.villageId);
+      removeHouse(h);
       if (v) log(`${v.name}的一间房屋被大火烧毁。`, 'war');
     }
   }
@@ -676,14 +832,12 @@ function simTick(dt) {
 
   updateUnits(dt);
   updateVillages(dt);
+  diplomacyTick(dt);
+  updateTornado(dt);
+  updateVolcanoes(dt);
   fireSpreadTick(dt);
   updateEffects(dt);
   updateDecals(dt);
-
-  if (world.warTimer > 0) {
-    world.warTimer -= dt;
-    if (world.warTimer <= 0) endWar();
-  }
 }
 
 function updateUnits(dt) {
@@ -692,6 +846,7 @@ function updateUnits(dt) {
   for (const u of units) {
     if (u.dead) continue;
     u.age += dt;
+    if (u.workCd > 0) u.workCd -= dt;
 
     if (u.burning) {
       u.hp -= dt * 3.4;
@@ -722,6 +877,16 @@ function updateUnits(dt) {
     if (u.hp <= 0 || u.age > u.maxAge) {
       u.dead = true;
       addCorpse(u);
+      if (u.king) {
+        const k = world.kingdoms[u.faction];
+        k.king = null;
+        const cap = world.villages.find(v => v.faction === u.faction && v.capital);
+        if (cap) cap.kingCd = rand(10, 18);
+        log(`${FACTIONS[u.faction].name}的国王战死，王位空悬。`, 'war');
+      }
+      if (u.infected && u.faction !== null && Math.random() < 0.6) {
+        spawnZombie(Math.floor(u.x / TILE), Math.floor(u.y / TILE));
+      }
       continue;
     }
 
@@ -744,11 +909,13 @@ function updateUnits(dt) {
 
 function isEnemy(a, b) {
   if (a.dead || b.dead) return false;
-  const aHostile = a.kind === 'monster' || a.kind === 'beast';
-  const bHostile = b.kind === 'monster' || b.kind === 'beast';
-  if (aHostile && !bHostile) return true;
-  if (!aHostile && bHostile) return true;
-  if (a.faction !== null && b.faction !== null && a.faction !== b.faction && world.atWar) return true;
+  const aMon = a.kind === 'monster', bMon = b.kind === 'monster';
+  const aBeast = a.kind === 'beast', bBeast = b.kind === 'beast';
+  if (aMon && !bMon) return true;
+  if (bMon && !aMon) return true;
+  if (aBeast && !bBeast && !bMon) return true;
+  if (bBeast && !aBeast && !aMon) return true;
+  if (a.faction !== null && b.faction !== null && a.faction !== b.faction && atWar(a.faction, b.faction)) return true;
   return false;
 }
 
@@ -763,82 +930,168 @@ function findEnemy(u, range) {
   return best;
 }
 
+function wander(u, centerX, centerY, radius) {
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const rr = rand(16, radius);
+    const tx = centerX + Math.cos(a) * rr;
+    const ty = centerY + Math.sin(a) * rr;
+    if (walkablePx(tx, ty)) {
+      u.txPx = tx;
+      u.tyPx = ty;
+      u.hasTarget = true;
+      return;
+    }
+  }
+}
+
 function think(u) {
-  // 流浪者加入附近村庄
   if (u.faction === null && u.kind === 'villager') {
     const v = nearestVillage(u.x, u.y, 90);
     if (v) {
       u.faction = v.faction;
       u.homeVillage = v.id;
-      u.img = img(`units/faction/${FACTIONS[v.faction].key}/${u.sprite}.png`);
+      u.job = Math.random() < 0.6 ? 'farmer' : 'idle';
+      u.imgPath = factionSpritePath(u.faction, u.sprite);
+      u.img = img(u.imgPath);
       if (Math.random() < 0.25) log(`${v.name}收留了一名流浪者。`, 'build');
       return;
     }
   }
 
-  const range = (u.kind === 'monster' || u.kind === 'beast') ? 180 : (world.atWar ? 250 : 95);
-  const enemy = findEnemy(u, range);
+  const home = u.homeVillage ? world.villages.find(v => v.id === u.homeVillage) : null;
 
-  if (enemy) {
-    u.target = enemy;
-    u.hasTarget = true;
-    u.txPx = enemy.x;
-    u.tyPx = enemy.y;
-    if (dist2(u.x, u.y, enemy.x, enemy.y) < 12 * 12 && u.atkCd <= 0) attack(u, enemy);
+  if (u.kind === 'monster' || u.kind === 'beast') {
+    const enemy = findEnemy(u, 170);
+    if (enemy) {
+      u.target = enemy;
+      u.hasTarget = true;
+      u.txPx = enemy.x;
+      u.tyPx = enemy.y;
+      if (dist2(u.x, u.y, enemy.x, enemy.y) < 12 * 12 && u.atkCd <= 0) attack(u, enemy);
+      return;
+    }
+    u.target = null;
+    if (!u.hasTarget || dist2(u.x, u.y, u.txPx, u.tyPx) < 6 * 6) wander(u, u.x, u.y, 70);
     return;
   }
 
-  u.target = null;
+  const wars = [...world.wars].filter(k => k.split('-').map(Number).includes(u.faction));
+  const atWarNow = wars.length > 0;
 
-  // 战时的战士会主动向敌国村庄进军
-  if (u.kind === 'soldier' && world.atWar) {
-    let bestV = null, bd = 1e12;
-    for (const v of world.villages) {
-      if (v.faction === u.faction) continue;
-      const d = dist2(u.x, u.y, v.tx * TILE, v.ty * TILE);
-      if (d < bd) { bd = d; bestV = v; }
-    }
-    if (bestV) {
+  if (u.job === 'king') {
+    const enemy = findEnemy(u, 140);
+    if (enemy && atWarNow) {
+      u.target = enemy;
       u.hasTarget = true;
-      u.txPx = bestV.tx * TILE + 8 + rand(-14, 14);
-      u.tyPx = bestV.ty * TILE + 12 + rand(-14, 14);
+      u.txPx = enemy.x;
+      u.tyPx = enemy.y;
+      if (dist2(u.x, u.y, enemy.x, enemy.y) < 12 * 12 && u.atkCd <= 0) attack(u, enemy);
       return;
     }
+    u.target = null;
+    if (!u.hasTarget || dist2(u.x, u.y, u.txPx, u.tyPx) < 8 * 8) {
+      if (home) wander(u, home.tx * TILE + 8, home.ty * TILE + 12, 4 * TILE);
+    }
+    return;
   }
 
-  // 游荡
-  if (!u.hasTarget || dist2(u.x, u.y, u.txPx, u.tyPx) < 6 * 6) {
-    const home = u.homeVillage ? world.villages.find(v => v.id === u.homeVillage) : null;
-    const cx = home ? home.tx * TILE : u.x;
-    const cy = home ? home.ty * TILE : u.y;
-    const r = home ? home.radius * TILE : 90;
-    for (let i = 0; i < 8; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const rr = rand(20, r);
-      const tx = cx + Math.cos(a) * rr;
-      const ty = cy + Math.sin(a) * rr;
-      if (walkablePx(tx, ty)) {
-        u.txPx = tx;
-        u.tyPx = ty;
+  if (u.kind === 'soldier') {
+    const enemy = findEnemy(u, atWarNow ? 260 : 90);
+    if (enemy) {
+      u.target = enemy;
+      u.hasTarget = true;
+      u.txPx = enemy.x;
+      u.tyPx = enemy.y;
+      if (dist2(u.x, u.y, enemy.x, enemy.y) < 12 * 12 && u.atkCd <= 0) attack(u, enemy);
+      return;
+    }
+    u.target = null;
+    if (atWarNow) {
+      const enemyV = world.villages
+        .filter(v => v.faction !== u.faction && atWar(u.faction, v.faction))
+        .sort((a, b) => dist2(u.x, u.y, a.tx * TILE, a.ty * TILE) - dist2(u.x, u.y, b.tx * TILE, b.ty * TILE))[0];
+      if (enemyV) {
+        const h = world.houses.find(hh => hh.villageId === enemyV.id);
+        if (h && dist2(u.x, u.y, h.tx * TILE + 8, h.ty * TILE + 8) < 20 * 20) {
+          if (u.atkCd <= 0) attackHouse(u, h);
+          u.hasTarget = false;
+          return;
+        }
         u.hasTarget = true;
-        break;
+        u.txPx = h ? h.tx * TILE + 8 : enemyV.tx * TILE + 8;
+        u.tyPx = h ? h.ty * TILE + 12 : enemyV.ty * TILE + 12;
+        return;
       }
     }
+    if (!u.hasTarget || dist2(u.x, u.y, u.txPx, u.tyPx) < 6 * 6) {
+      if (home) wander(u, home.tx * TILE + 8, home.ty * TILE + 12, home.radius * TILE);
+    }
+    return;
   }
+
+  // 村民劳作
+  if (home) {
+    if (!u.hasTarget || dist2(u.x, u.y, u.txPx, u.tyPx) < 7 * 7) {
+      wander(u, home.tx * TILE + 8, home.ty * TILE + 12, home.radius * TILE);
+    }
+    if (dist2(u.x, u.y, home.tx * TILE + 8, home.ty * TILE + 12) < (home.radius + 2) * TILE * (home.radius + 2) * TILE) {
+      if (u.workCd <= 0) {
+        if (u.job === 'farmer') {
+          home.food = Math.min(120, home.food + 0.85);
+          u.workCd = 2.2;
+          addEffect('effects/icons/spark.png', u.x + rand(-5, 5), u.y - 8, 14, 0.4, { vy: -12 });
+        } else if (u.job === 'builder') {
+          home.wood = Math.min(90, home.wood + 0.45);
+          u.workCd = 2.2;
+          addEffect('effects/fx/dirt_01.png', u.x + rand(-5, 5), u.y - 4, 14, 0.35, { vy: -8 });
+        } else if (u.job === 'idle') {
+          home.food = Math.min(120, home.food + 0.1);
+          u.workCd = 3.2;
+        }
+      }
+    }
+    return;
+  }
+
+  if (!u.hasTarget || dist2(u.x, u.y, u.txPx, u.tyPx) < 8 * 8) wander(u, u.x, u.y, 80);
 }
 
 function attack(u, enemy) {
-  u.atkCd = u.kind === 'soldier' ? 0.85 : 1.05;
+  u.atkCd = u.kind === 'soldier' || u.kind === 'king' ? 0.85 : 1.05;
   const dmg = u.dmg * rand(0.75, 1.25);
   enemy.hp -= dmg;
   addEffect('effects/fx/slash_01.png', enemy.x, enemy.y - 6, 20, 0.22, { rot: rand(-0.5, 0.5) });
+  if (u.kind === 'monster' && u.sprite === 'zombie' && enemy.faction !== null && !enemy.infected && Math.random() < 0.22) {
+    enemy.infected = true;
+    enemy.infectedT = rand(10, 18);
+  }
   if (enemy.hp <= 0 && !enemy.dead) {
     enemy.dead = true;
     addCorpse(enemy);
+    if (enemy.king) {
+      const k = world.kingdoms[enemy.faction];
+      k.king = null;
+      const cap = world.villages.find(v => v.faction === enemy.faction && v.capital);
+      if (cap) cap.kingCd = rand(10, 18);
+      log(`${FACTIONS[enemy.faction].name}的国王阵亡。`, 'war');
+    }
     if (enemy.kind === 'soldier' && Math.random() < 0.12) {
       const v = world.villages.find(vv => vv.id === enemy.homeVillage);
       if (v) log(`${v.name}的一名战士战死。`, 'war');
     }
+  }
+}
+
+function attackHouse(u, h) {
+  u.atkCd = 1.1;
+  h.hp -= u.dmg * rand(0.6, 1.1);
+  addEffect('effects/fx/slash_01.png', h.tx * TILE + 8, h.ty * TILE + 4, 22, 0.22, { rot: rand(-0.5, 0.5) });
+  const v = world.villages.find(vv => vv.id === h.villageId);
+  if (h.hp <= 0) {
+    addDecal('effects/fx/scorch_dark.png', h.tx * TILE + 8, h.ty * TILE + 8, 30, 50);
+    removeHouse(h);
+    if (v) log(`${v.name}的一间房屋被摧毁。`, 'war');
   }
 }
 
@@ -872,38 +1125,78 @@ function moveUnit(u, dt) {
 }
 
 function updateVillages(dt) {
-  for (const v of world.villages) {
+  for (const v of [...world.villages]) {
     const members = world.units.filter(u => !u.dead && u.homeVillage === v.id);
     v.pop = members.length;
-    v.food = Math.min(70, v.food + v.pop * 0.22 * dt);
+    const farmers = members.filter(u => u.job === 'farmer').length;
+    const builders = members.filter(u => u.job === 'builder').length;
+    const soldiers = members.filter(u => u.job === 'soldier').length;
 
+    v.food = Math.max(0, Math.min(120, v.food - v.pop * 0.038 * dt));
+    v.wood = Math.min(90, v.wood + (builders * 0.02) * dt);
+    v.stone = Math.min(60, v.stone + 0.01 * dt);
+
+    const wars = [...world.wars].filter(k => k.split('-').map(Number).includes(v.faction)).length;
+    const targetHappy = clamp(46 + Math.min(26, v.food * 0.28) + v.houses.length * 1.6 - wars * 12, 5, 96);
+    v.happiness += (targetHappy - v.happiness) * Math.min(1, dt * 0.15);
+
+    v.radius = 6 + Math.min(9, v.houses.length * 0.6);
     v.spawnCd -= dt;
     v.buildCd -= dt;
     v.soldierCd -= dt;
 
-    const cap = 4 + v.houses.length * 3;
-    if (v.pop < cap && v.food >= 6 && v.spawnCd <= 0 && v.pop < 32) {
+    const cap = 3 + v.houses.length * 3;
+    if (v.pop < cap && v.food >= 8 && v.happiness > 36 && v.spawnCd <= 0) {
       spawnVillager(v);
-      v.food -= 6;
-      v.spawnCd = rand(6, 10);
+      v.food -= 5;
+      v.spawnCd = rand(5, 9);
     }
 
-    if (v.houses.length < 9 && v.pop > v.houses.length * 2 + 1 && v.food >= 10 && v.buildCd <= 0) {
+    if (v.houses.length < 12 && v.wood >= 10 && v.pop > v.houses.length * 2.2 && v.buildCd <= 0) {
       const spot = findOpenSpot(v.tx, v.ty, 1, 7);
       if (spot) {
         addHouse(v, spot.tx, spot.ty);
-        v.food -= 10;
-        v.buildCd = rand(7, 12);
-        if (Math.random() < 0.5) log(`${v.name}建起了一座新房屋。`, 'build');
+        v.wood -= 10;
+        v.buildCd = rand(9, 15);
+        addEffect('effects/icons/spark.png', spot.tx * TILE + 8, spot.ty * TILE + 8, 30, 0.7, { vy: -12 });
+        if (Math.random() < 0.4) log(`${v.name}建起了一座新房屋。`, 'build');
       }
     }
 
-    if (world.atWar && v.pop >= 4 && v.soldierCd <= 0) {
-      const soldiers = members.filter(u => u.kind === 'soldier').length;
-      if (soldiers < 5) {
-        spawnSoldier(v);
-        v.soldierCd = rand(6, 10);
+    if (wars > 0 && v.pop >= 4 && soldiers < Math.min(6, 1 + Math.floor(v.pop / 3)) && v.soldierCd <= 0 && v.food > 3) {
+      spawnSoldier(v);
+      v.food -= 3;
+      v.soldierCd = rand(8, 13);
+    }
+
+    if (v.food <= 0 && v.pop > 0 && Math.random() < dt * 0.008) {
+      const victim = members.find(u => !u.king && u.job !== 'soldier');
+      if (victim) {
+        victim.dead = true;
+        addCorpse(victim);
+        log(`${v.name}有人因饥荒死去。`, 'war');
       }
+    }
+
+    if (v.capital) {
+      const aliveKing = members.some(u => u.king);
+      if (!aliveKing) {
+        v.kingCd -= dt;
+        if (v.kingCd <= 0 && world.villages.includes(v)) {
+          spawnKing(v);
+          log(`${FACTIONS[v.faction].name}拥立了新国王。`, 'diplo');
+        }
+      }
+    }
+
+    if (v.houses.length === 0) {
+      v.razeCd = (v.razeCd || 0) + dt;
+      if (v.pop === 0 && v.razeCd > 12) {
+        log(`${v.name}沦为废墟。`, 'war');
+        removeVillage(v);
+      }
+    } else {
+      v.razeCd = 0;
     }
   }
 }
@@ -927,66 +1220,222 @@ function updateDecals(dt) {
   }
 }
 
-/* ---------------- years & war ---------------- */
+/* ---------------- disasters ---------------- */
+
+function diplomacyTick(dt) {
+  for (const key of [...world.wars]) {
+    world.warTimers[key] = (world.warTimers[key] || 60) - dt;
+    if (world.warTimers[key] <= 0) {
+      const [a, b] = key.split('-').map(Number);
+      makePeace(a, b);
+    }
+  }
+}
+
+function spawnTornado(tx, ty) {
+  world.tornado = {
+    x: tx * TILE + 8, y: ty * TILE + 8,
+    life: 26, dir: rand(0, Math.PI * 2), speed: rand(55, 75)
+  };
+  flash(0.35);
+  log('龙卷风登陆，沿途的一切都被卷入空中。', 'war');
+  toast('龙卷风来袭');
+}
+
+function updateTornado(dt) {
+  const t = world.tornado;
+  if (!t) return;
+  t.life -= dt;
+  t.dir += rand(-0.5, 0.5) * dt;
+  t.x += Math.cos(t.dir) * t.speed * dt;
+  t.y += Math.sin(t.dir) * t.speed * dt;
+  if (t.x < 60 || t.x > W * TILE - 60) t.dir = Math.PI - t.dir;
+  if (t.y < 60 || t.y > H * TILE - 60) t.dir = -t.dir;
+
+  if (Math.random() < dt * 22) {
+    addEffect(pick(['effects/fx/magic_05.png', 'effects/fx/smoke_01.png', 'effects/fx/flame_03.png']),
+      t.x + rand(-22, 22), t.y + rand(-18, 8), rand(28, 62), rand(0.3, 0.7), { vy: -46, vr: rand(-5, 5) });
+  }
+
+  for (const tree of [...world.trees.values()]) {
+    if (dist2(tree.x * TILE + 8, tree.y * TILE + 8, t.x, t.y) < 30 * 30 && Math.random() < dt * 1.4) {
+      world.trees.delete(tree.x + ',' + tree.y);
+      addDecal('effects/fx/scorch_01.png', tree.x * TILE + 8, tree.y * TILE + 8, 22, 30);
+    }
+  }
+  for (const h of [...world.houses]) {
+    if (dist2(h.tx * TILE + 8, h.ty * TILE + 8, t.x, t.y) < 34 * 34 && Math.random() < dt * 1.1) {
+      removeHouse(h);
+      const v = world.villages.find(vv => vv.id === h.villageId);
+      if (v) log(`${v.name}的房屋被龙卷风卷走。`, 'war');
+    }
+  }
+  for (const u of world.units) {
+    if (u.dead) continue;
+    if (dist2(u.x, u.y, t.x, t.y) < 48 * 48) {
+      u.hp -= dt * 8;
+      u.x += rand(-40, 40) * dt;
+      u.y += rand(-40, 40) * dt;
+      u.hasTarget = false;
+    }
+  }
+
+  if (t.life <= 0) {
+    world.tornado = null;
+    log('龙卷风渐渐消散。', 'diplo');
+  }
+}
+
+function spawnVolcano(tx, ty) {
+  world.volcanoes.push({ tx, ty, life: rand(22, 34), eruptCd: 0 });
+  for (let y = ty - 3; y <= ty + 3; y++) {
+    for (let x = tx - 3; x <= tx + 3; x++) {
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      if (dist2(x, y, tx, ty) > 3.2 * 3.2) continue;
+      if (world.terrain[tileIdx(x, y)] === T_WATER) continue;
+      world.terrain[tileIdx(x, y)] = T_ROCK;
+      world.variant[tileIdx(x, y)] = 0;
+      world.trees.delete(x + ',' + y);
+      const h = houseAt(x, y);
+      if (h) removeHouse(h);
+    }
+  }
+  redrawRegion(tx - 4, ty - 4, tx + 4, ty + 4);
+  flash(0.5);
+  shake(14);
+  igniteTile(tx, ty);
+  log('火山喷发，熔岩吞没了周围的大地。', 'war');
+  toast('火山喷发');
+}
+
+function updateVolcanoes(dt) {
+  for (let i = world.volcanoes.length - 1; i >= 0; i--) {
+    const v = world.volcanoes[i];
+    v.life -= dt;
+    v.eruptCd -= dt;
+    if (v.eruptCd <= 0) {
+      v.eruptCd = rand(0.9, 1.8);
+      const tx = v.tx + ((Math.random() * 7) | 0) - 3;
+      const ty = v.ty + ((Math.random() * 7) | 0) - 3;
+      igniteTile(tx, ty);
+      addEffect(pick(['effects/fx/fire_01.png', 'effects/fx/flame_04.png', 'effects/fx/smoke_05.png']),
+        tx * TILE + 8, ty * TILE + 8, rand(26, 48), rand(0.5, 1), { vy: -22 });
+      if (Math.random() < 0.12) shake(3);
+    }
+    if (v.life <= 0) world.volcanoes.splice(i, 1);
+  }
+}
+
+function earthquake(tx, ty) {
+  flash(0.4);
+  shake(24);
+  for (let i = 0; i < 46; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = rand(2, 12);
+    const x = Math.round(tx + Math.cos(a) * r);
+    const y = Math.round(ty + Math.sin(a) * r);
+    if (x < 0 || y < 0 || x >= W || y >= H) continue;
+    const i2 = tileIdx(x, y);
+    const t = world.terrain[i2];
+    if (t === T_GRASS || t === T_SAND) {
+      world.terrain[i2] = Math.random() < 0.5 ? T_ROCK : T_SAND;
+      world.variant[i2] = 0;
+      world.trees.delete(x + ',' + y);
+    }
+    addDecal('effects/fx/scorch_01.png', x * TILE + 8, y * TILE + 8, rand(18, 34), 40);
+  }
+  for (const u of world.units) {
+    if (!u.dead && dist2(u.x, u.y, tx * TILE, ty * TILE) < 12 * TILE * 12 * TILE) u.hp -= rand(15, 40);
+  }
+  for (const h of [...world.houses]) {
+    if (dist2(h.tx, h.ty, tx, ty) < 10 * 10) {
+      h.hp -= rand(50, 100);
+      if (h.hp <= 0) {
+        const v = world.villages.find(vv => vv.id === h.villageId);
+        removeHouse(h);
+        if (v) log(`${v.name}的房屋在地震中倒塌。`, 'war');
+      }
+    }
+  }
+  redrawRegion(tx - 13, ty - 13, tx + 13, ty + 13);
+  log('大地剧烈震颤，地表被撕开裂口。', 'war');
+  toast('地震');
+}
+
+/* ---------------- years ---------------- */
 
 function yearlyEvent() {
-  if (world.villages.length >= 2 && !world.atWar && Math.random() < 0.2) {
-    startWar(true);
+  const ids = activeKingdomIds();
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = ids[i], b = ids[j];
+      if (atWar(a, b)) {
+        if (relation(a, b) > -55 && Math.random() < 0.4) makePeace(a, b, true);
+        continue;
+      }
+      const r = relation(a, b);
+      if (!allied(a, b) && r < -50 && Math.random() < 0.32) {
+        declareWar(a, b, true);
+      } else if (!allied(a, b) && r > 60 && Math.random() < 0.28) {
+        formAlliance(a, b, true);
+      } else if (r > -50) {
+        setRelation(a, b, r + (Math.random() < 0.5 ? 2 : -3));
+      }
+    }
+  }
+
+  // 国家开拓新村庄
+  for (const k of world.kingdoms) {
+    if (k.villages.length === 0 || k.villages.length >= 5 || world.villages.length >= 12) continue;
+    if (Math.random() > 0.17) continue;
+    const home = world.villages.find(v => v.id === pick(k.villages));
+    if (!home || home.houses.length < 3) continue;
+    for (let i = 0; i < 40; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = rand(10, 22);
+      const tx = Math.round(home.tx + Math.cos(a) * r);
+      const ty = Math.round(home.ty + Math.sin(a) * r);
+      if (canPlaceVillage(tx, ty)) {
+        const nv = placeVillage(tx, ty, k.id, true);
+        log(`${FACTIONS[k.id].name}的开拓者建立了${nv.name}。`, 'build');
+        break;
+      }
+    }
   }
 
   const roll = Math.random();
-  if (roll < 0.16 && world.villages.length > 0) {
+  if (roll < 0.14 && world.villages.length > 0) {
     const v = pick(world.villages);
     const spot = findOpenSpot(v.tx, v.ty, 8, 16);
     if (spot) spawnBeast(spot.tx, spot.ty);
-  } else if (roll < 0.24) {
+  } else if (roll < 0.22) {
     for (let i = 0; i < 6; i++) {
       const tx = (Math.random() * W) | 0;
       const ty = (Math.random() * H) | 0;
       if (isLand(tx, ty)) { spawnMonster(tx, ty); break; }
     }
-  } else if (roll < 0.34) {
+  } else if (roll < 0.32) {
     const lines = [
       '海风吹过群岛，卷起一层薄雾。',
       '林间的鸟兽比往年更安静了。',
       '远方的商队带来了陌生的歌谣。',
-      '有人在夜里看见山脊上亮起微光。'
+      '有人在夜里看见山脊上亮起微光。',
+      '集市上开始流通新的铜币。'
     ];
     log(pick(lines));
   }
 
-  if (Math.random() < 0.06 && world.villages.length > 0) {
+  if (Math.random() < 0.05 && world.villages.length > 0) {
     const v = pick(world.villages);
     const spot = findOpenSpot(v.tx, v.ty, 5, 12);
     if (spot) igniteTile(spot.tx, spot.ty);
   }
 }
 
-function startWar(quiet = false) {
-  if (world.atWar || world.villages.length < 2) return;
-  world.atWar = true;
-  world.warTimer = 90;
-  log('战火燃起，诸国互相宣战。', 'war');
-  if (!quiet) toast('战争爆发');
-  shake(8);
-  for (const v of world.villages) {
-    spawnSoldier(v);
-    if (Math.random() < 0.6) spawnSoldier(v);
-  }
-}
-
-function endWar() {
-  if (!world.atWar) return;
-  world.atWar = false;
-  world.warTimer = 0;
-  log('战争结束，大地暂时归于平静。', 'build');
-  toast('战争结束');
-}
-
 /* ---------------- god tools ---------------- */
 
-const CONTINUOUS = new Set(['land', 'water', 'sand', 'forest', 'rock', 'human', 'beast', 'monster', 'fire', 'plague', 'heal', 'clear']);
-const ACTIONS = new Set(['lightning', 'meteor', 'village', 'war']);
+const CONTINUOUS = new Set(['land', 'water', 'sand', 'forest', 'rock', 'human', 'beast', 'monster', 'zombie', 'fire', 'plague', 'acid', 'heal', 'bless', 'clear']);
+const ACTIONS = new Set(['lightning', 'meteor', 'tornado', 'earthquake', 'volcano', 'village', 'war']);
 
 function applyAction(tool, tx, ty) {
   const px = tx * TILE + 8, py = ty * TILE + 8;
@@ -1044,6 +1493,10 @@ function applyAction(tool, tx, ty) {
     return;
   }
 
+  if (tool === 'tornado') { spawnTornado(tx, ty); return; }
+  if (tool === 'volcano') { spawnVolcano(tx, ty); return; }
+  if (tool === 'earthquake') { earthquake(tx, ty); return; }
+
   if (tool === 'village') {
     if (!canPlaceVillage(tx, ty)) {
       toast('这里无法建立村庄');
@@ -1055,9 +1508,26 @@ function applyAction(tool, tx, ty) {
   }
 
   if (tool === 'war') {
-    if (world.atWar) endWar();
-    else if (world.villages.length < 2) toast('至少需要两个村庄');
-    else startWar();
+    const ids = activeKingdomIds();
+    if (world.wars.size > 0) {
+      for (const key of [...world.wars]) {
+        const [a, b] = key.split('-').map(Number);
+        makePeace(a, b, true);
+      }
+      log('诸国在神明见证下停战。', 'diplo');
+      toast('全面停战');
+    } else if (ids.length < 2) {
+      toast('至少需要两个国家');
+    } else {
+      let bestA = ids[0], bestB = ids[1], br = relation(ids[0], ids[1]);
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const r = relation(ids[i], ids[j]);
+          if (r < br) { br = r; bestA = ids[i]; bestB = ids[j]; }
+        }
+      }
+      declareWar(bestA, bestB);
+    }
   }
 }
 
@@ -1065,29 +1535,26 @@ function applyBrush(tool, tx, ty) {
   const r = state.brush;
   const r2 = r * r + 0.6;
 
-  if (tool === 'human') {
+  if (tool === 'human' || tool === 'monster' || tool === 'beast') {
     for (let i = 0; i < 2; i++) {
       const x = tx + ((Math.random() * (r * 2 + 1)) | 0) - r;
       const y = ty + ((Math.random() * (r * 2 + 1)) | 0) - r;
-      if (isLand(x, y)) spawnHuman(x, y);
+      if (!isLand(x, y)) continue;
+      if (tool === 'human') spawnHuman(x, y);
+      else if (tool === 'monster') spawnMonster(x, y);
+      else spawnBeast(x, y);
     }
     return;
   }
 
-  if (tool === 'monster') {
-    for (let i = 0; i < 2; i++) {
-      const x = tx + ((Math.random() * (r * 2 + 1)) | 0) - r;
-      const y = ty + ((Math.random() * (r * 2 + 1)) | 0) - r;
-      if (isLand(x, y)) spawnMonster(x, y);
-    }
-    return;
-  }
-
-  if (tool === 'beast') {
-    for (let i = 0; i < 2; i++) {
-      const x = tx + ((Math.random() * (r * 2 + 1)) | 0) - r;
-      const y = ty + ((Math.random() * (r * 2 + 1)) | 0) - r;
-      if (isLand(x, y)) spawnBeast(x, y);
+  if (tool === 'zombie') {
+    for (const u of [...world.units]) {
+      if (u.dead || u.faction === null || u.kind === 'monster' || u.kind === 'beast') continue;
+      if (dist2(Math.floor(u.x / TILE), Math.floor(u.y / TILE), tx, ty) > r2) continue;
+      u.dead = true;
+      addCorpse(u);
+      spawnZombie(Math.floor(u.x / TILE), Math.floor(u.y / TILE));
+      addEffect('effects/fx/magic_03.png', u.x, u.y - 8, 24, 0.6, { vy: -10 });
     }
     return;
   }
@@ -1110,6 +1577,37 @@ function applyBrush(tool, tx, ty) {
         addEffect('effects/fx/magic_03.png', u.x, u.y - 8, 22, 0.6, { vy: -8 });
       }
     }
+    return;
+  }
+
+  if (tool === 'acid') {
+    let changed = false;
+    for (let y = ty - r; y <= ty + r; y++) {
+      for (let x = tx - r; x <= tx + r; x++) {
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        if (dist2(x, y, tx, ty) > r2) continue;
+        const i = tileIdx(x, y);
+        if (world.terrain[i] === T_GRASS) { world.terrain[i] = T_SAND; changed = true; }
+        const tree = world.trees.get(x + ',' + y);
+        if (tree) {
+          world.trees.delete(x + ',' + y);
+          addDecal('effects/fx/scorch_dark.png', x * TILE + 8, y * TILE + 8, 20, 40);
+        }
+        if (Math.random() < 0.16) addEffect('effects/icons/poison_aura.png', x * TILE + 8, y * TILE + 8, rand(14, 24), 0.6, { vy: -6 });
+      }
+    }
+    for (const u of world.units) {
+      if (u.dead) continue;
+      if (dist2(Math.floor(u.x / TILE), Math.floor(u.y / TILE), tx, ty) <= r2) {
+        u.hp -= 26;
+        u.infected = true;
+        u.infectedT = rand(6, 14);
+      }
+    }
+    for (const h of [...world.houses]) {
+      if (dist2(h.tx, h.ty, tx, ty) <= r2) h.hp -= 20;
+    }
+    if (changed) redrawRegion(tx - r, ty - r, tx + r, ty + r);
     return;
   }
 
@@ -1138,6 +1636,35 @@ function applyBrush(tool, tx, ty) {
     return;
   }
 
+  if (tool === 'bless') {
+    for (const u of world.units) {
+      if (u.dead) continue;
+      if (dist2(Math.floor(u.x / TILE), Math.floor(u.y / TILE), tx, ty) <= r2) {
+        u.hp = Math.min(u.maxHp, u.hp + 30);
+        u.burning = false;
+        u.infected = false;
+        addEffect('effects/icons/spark.png', u.x, u.y - 10, 20, 0.6, { vy: -14 });
+      }
+    }
+    for (const v of world.villages) {
+      if (dist2(v.tx, v.ty, tx, ty) <= r2) {
+        v.food = Math.min(120, v.food + 16);
+        v.wood = Math.min(90, v.wood + 8);
+        v.happiness = Math.min(96, v.happiness + 8);
+      }
+    }
+    for (let y = ty - r; y <= ty + r; y++) {
+      for (let x = tx - r; x <= tx + r; x++) {
+        if (dist2(x, y, tx, ty) > r2) continue;
+        const i = tileIdx(x, y);
+        if (x >= 0 && y >= 0 && x < W && y < H && world.terrain[i] === T_GRASS && !world.trees.has(x + ',' + y) && Math.random() < 0.15) {
+          addTree(x, y, Math.random() < 0.5 ? 'tree' : 'bush');
+        }
+      }
+    }
+    return;
+  }
+
   if (tool === 'clear') {
     for (const u of [...world.units]) {
       if (dist2(Math.floor(u.x / TILE), Math.floor(u.y / TILE), tx, ty) <= r2) {
@@ -1148,7 +1675,6 @@ function applyBrush(tool, tx, ty) {
     return;
   }
 
-  // 地形工具
   let changed = false;
   for (let y = ty - r; y <= ty + r; y++) {
     for (let x = tx - r; x <= tx + r; x++) {
@@ -1160,7 +1686,6 @@ function applyBrush(tool, tx, ty) {
 
       if (tool === 'land') {
         if (cur === T_WATER) next = T_SAND;
-        else if (cur === T_SAND) next = T_GRASS;
         else if (cur === T_ROCK) next = T_GRASS;
       } else if (tool === 'water') {
         next = T_WATER;
@@ -1199,563 +1724,1001 @@ function applyBrush(tool, tx, ty) {
   if (changed) redrawRegion(tx - r, ty - r, tx + r, ty + r);
 }
 
-/* ---------------- UI ---------------- */
+/* ---------------- UI data ---------------- */
 
 const TOOL_GROUPS = [
   {
-    label: '观察', tools: [
-      { id: 'select', label: '查看', icon: 'icons/target.png', desc: '点击生灵或房屋查看详情' }
+    id: 'view', label: '观察', icon: 'icons/target.png',
+    tools: [{ id: 'select', name: '观察', icon: 'icons/target.png', hint: '点击生灵、房屋或村庄查看详情' }]
+  },
+  {
+    id: 'terrain', label: '地形', icon: 'terrain/grass.png',
+    tools: [
+      { id: 'land', name: '陆地', icon: 'terrain/grass.png', hint: '把海水抬成沙地，把山岩风化成草原' },
+      { id: 'water', name: '海洋', icon: 'terrain/water.png', hint: '沉下大地，淹没房屋与生灵' },
+      { id: 'sand', name: '沙地', icon: 'terrain/sand.png', hint: '铺开沙土，抹去植被' },
+      { id: 'forest', name: '森林', icon: 'nature/tree.png', hint: '催生草地与树林' },
+      { id: 'rock', name: '山岩', icon: 'terrain/stone.png', hint: '隆起山岩，驱散生命' }
     ]
   },
   {
-    label: '地形', tools: [
-      { id: 'land', label: '陆地', icon: 'terrain/grass.png' },
-      { id: 'water', label: '海洋', icon: 'terrain/water.png' },
-      { id: 'sand', label: '沙滩', icon: 'terrain/sand.png' },
-      { id: 'forest', label: '森林', icon: 'nature/tree.png' },
-      { id: 'rock', label: '山岩', icon: 'terrain/stone.png' }
+    id: 'life', label: '生命', icon: 'units/faction/blue/villager_m.png',
+    tools: [
+      { id: 'human', name: '人类', icon: 'units/faction/blue/villager_m.png', hint: '播撒人类，他们会投奔附近村庄' },
+      { id: 'beast', name: '野兽', icon: 'units/bat.png', hint: '放出生性凶猛的野兽' },
+      { id: 'monster', name: '怪物', icon: 'units/skeleton.png', hint: '唤醒憎恨一切生灵的怪物' },
+      { id: 'zombie', name: '僵尸', icon: 'units/zombie.png', hint: '把人类变成传染性的僵尸' }
     ]
   },
   {
-    label: '生命', tools: [
-      { id: 'human', label: '人类', icon: 'units/villager_m.png' },
-      { id: 'beast', label: '野兽', icon: 'units/spider.png' },
-      { id: 'monster', label: '怪物', icon: 'units/demon.png' }
+    id: 'disaster', label: '灾难', icon: 'effects/icons/fire.png',
+    tools: [
+      { id: 'fire', name: '火焰', icon: 'effects/icons/fire.png', hint: '点燃森林与房屋，火势会自行蔓延' },
+      { id: 'plague', name: '瘟疫', icon: 'effects/icons/poison_aura.png', hint: '让生灵染病，并在人群中传染' },
+      { id: 'lightning', name: '闪电', icon: 'effects/icons/bolt.png', hint: '降下雷霆，劈碎范围内的生命' },
+      { id: 'meteor', name: '陨石', icon: 'effects/icons/meteor.png', hint: '天外火球砸出岩坑与烈焰' },
+      { id: 'tornado', name: '龙卷', icon: 'effects/fx/magic_05.png', hint: '召唤移动的龙卷风，撕碎沿途一切' },
+      { id: 'earthquake', name: '地震', icon: 'icons/warning.png', hint: '撕裂大地，震塌房屋' },
+      { id: 'volcano', name: '火山', icon: 'effects/fx/fire_01.png', hint: '隆起火山，持续喷发熔岩' },
+      { id: 'acid', name: '酸雨', icon: 'effects/icons/poison_aura.png', hint: '腐蚀大地、植被与血肉' }
     ]
   },
   {
-    label: '神迹', tools: [
-      { id: 'fire', label: '火焰', icon: 'effects/icons/fire.png' },
-      { id: 'lightning', label: '闪电', icon: 'effects/icons/bolt.png' },
-      { id: 'meteor', label: '陨石', icon: 'effects/icons/meteor.png' },
-      { id: 'plague', label: '瘟疫', icon: 'units/slime.png' },
-      { id: 'heal', label: '治愈', icon: 'effects/icons/heal.png' }
+    id: 'civ', label: '文明', icon: 'buildings/faction_blue_a.png',
+    tools: [
+      { id: 'village', name: '建村', icon: 'buildings/faction_blue_a.png', hint: '在空地上建立一座村庄，自动归属人口最少的国家' },
+      { id: 'war', name: '战争', icon: 'units/sword.png', hint: '让关系最差的两个国家开战；再次使用则全面停战' }
     ]
   },
   {
-    label: '文明', tools: [
-      { id: 'village', label: '村庄', icon: 'buildings/house_a.png' },
-      { id: 'war', label: '战争', icon: 'units/sword.png' },
-      { id: 'clear', label: '抹除', icon: 'units/skull.png' }
+    id: 'power', label: '神迹', icon: 'effects/icons/heal.png',
+    tools: [
+      { id: 'heal', name: '治愈', icon: 'effects/icons/heal.png', hint: '治愈伤势、熄灭火焰、净化瘟疫' },
+      { id: 'bless', name: '祝福', icon: 'effects/icons/spark.png', hint: '赐予食物与木材，让草木生长' },
+      { id: 'clear', name: '抹除', icon: 'icons/trashcan.png', hint: '抹除范围内的所有生灵' }
     ]
   }
 ];
 
-function buildToolbar() {
-  const root = document.getElementById('tools');
-  root.innerHTML = '';
-  for (const group of TOOL_GROUPS) {
-    const g = document.createElement('div');
-    g.className = 'tool-group';
-    const label = document.createElement('div');
-    label.className = 'tool-group-label';
-    label.textContent = group.label;
-    const row = document.createElement('div');
-    row.className = 'tool-row';
-    for (const tool of group.tools) {
-      const btn = document.createElement('button');
-      btn.className = 'tool' + (tool.id === state.tool ? ' active' : '');
-      btn.dataset.tool = tool.id;
-      btn.title = tool.desc || tool.label;
-      btn.innerHTML = `<img src="assets/${tool.icon}" alt=""><span>${tool.label}</span>`;
-      btn.addEventListener('click', () => selectTool(tool.id));
-      row.appendChild(btn);
-    }
-    g.appendChild(label);
-    g.appendChild(row);
-    root.appendChild(g);
-  }
-}
+const TOOL_INFO = {};
+for (const g of TOOL_GROUPS) for (const t of g.tools) TOOL_INFO[t.id] = t;
 
-function selectTool(id) {
-  state.tool = id;
-  document.querySelectorAll('.tool').forEach(el => {
-    el.classList.toggle('active', el.dataset.tool === id);
-  });
-}
-
-function setSpeed(speed) {
-  if (speed === 0) {
-    if (state.speed > 0) state.lastSpeed = state.speed;
-    state.speed = 0;
-  } else {
-    state.speed = speed;
-    state.lastSpeed = speed;
-  }
-  document.querySelectorAll('.speed').forEach(el => {
-    const v = Number(el.dataset.speed);
-    el.classList.toggle('active', v === state.speed);
-  });
-}
-
-function setBrush(v) {
-  state.brush = clamp(v, 1, 7);
-  document.getElementById('brush-size').textContent = String(state.brush);
-}
-
-function setupUI() {
-  buildToolbar();
-
-  document.querySelectorAll('.speed').forEach(btn => {
-    btn.addEventListener('click', () => setSpeed(Number(btn.dataset.speed)));
-  });
-
-  document.getElementById('brush-minus').addEventListener('click', () => setBrush(state.brush - 1));
-  document.getElementById('brush-plus').addEventListener('click', () => setBrush(state.brush + 1));
-
-  document.getElementById('btn-zoom-in').addEventListener('click', () => zoomBy(1.2));
-  document.getElementById('btn-zoom-out').addEventListener('click', () => zoomBy(1 / 1.2));
-
-  document.getElementById('btn-help').addEventListener('click', () => {
-    document.getElementById('help').classList.remove('hidden');
-  });
-  document.getElementById('btn-help-close').addEventListener('click', () => {
-    document.getElementById('help').classList.add('hidden');
-  });
-
-  document.getElementById('btn-reset').addEventListener('click', () => {
-    newWorld((Math.random() * 1e9) | 0);
-    toast('新的世界已生成');
-  });
-
-  document.getElementById('btn-start').addEventListener('click', () => {
-    document.getElementById('splash').classList.add('hidden');
-    toast('点击下方工具，开始塑造世界');
-  });
-  document.getElementById('btn-new').addEventListener('click', () => {
-    newWorld((Math.random() * 1e9) | 0);
-  });
-
-  window.addEventListener('keydown', e => {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      setSpeed(state.speed > 0 ? 0 : (state.lastSpeed || 1));
-    } else if (e.key === '1') setSpeed(1);
-    else if (e.key === '2') setSpeed(2);
-    else if (e.key === '3') setSpeed(4);
-    else if (e.key === '0') setSpeed(0);
-    else if (e.key === 'Escape') document.getElementById('help').classList.add('hidden');
-  });
-}
-
-function log(msg, type = '') {
-  if (!world) return;
-  world.log.unshift({ year: world.year, msg, type });
-  if (world.log.length > 24) world.log.pop();
-  renderLog();
-}
-
-function renderLog() {
-  const list = document.getElementById('log-list');
-  if (!world) return;
-  list.innerHTML = world.log.slice(0, 8).map(e =>
-    `<div class="log-entry ${e.type}"><b>第${e.year}年</b>${e.msg}</div>`
-  ).join('');
-}
+/* ---------------- log & toast ---------------- */
 
 let toastTimer = null;
-function toast(msg) {
+function toast(text) {
   const el = document.getElementById('toast');
-  el.textContent = msg;
+  el.textContent = text;
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
+function log(text, type = '') {
+  if (!world) return;
+  world.log.unshift({ text, type, year: world.year });
+  if (world.log.length > 36) world.log.pop();
+  renderLog();
+}
+
+function renderLog() {
+  const el = document.getElementById('log-list');
+  if (!el || !world) return;
+  el.innerHTML = world.log.slice(0, 7).map(e =>
+    `<div class="log-entry ${e.type}"><b>${e.year}年</b>${e.text}</div>`
+  ).join('');
+}
+
+/* ---------------- HUD ---------------- */
+
 function updateHUD() {
   if (!world) return;
-  const pop = world.units.filter(u => u.faction !== null).length;
-  document.getElementById('stat-year').textContent = String(world.year);
-  document.getElementById('stat-pop').textContent = String(pop);
-  document.getElementById('stat-villages').textContent = String(world.villages.length);
+  const civs = world.units.filter(u => !u.dead && u.faction !== null && u.kind !== 'monster' && u.kind !== 'beast').length;
+  const wars = world.wars.size;
+  document.getElementById('stat-year').textContent = world.year;
+  document.getElementById('stat-pop').textContent = civs;
+  document.getElementById('stat-villages').textContent = world.villages.length;
+  document.getElementById('stat-kingdoms').textContent = activeKingdomIds().length;
   const warEl = document.getElementById('stat-war');
-  warEl.textContent = world.atWar ? '战争' : '和平';
-  warEl.classList.toggle('hot', world.atWar);
-  updateInspector();
+  warEl.textContent = wars > 0 ? '战争 ' + wars : '和平';
+  warEl.classList.toggle('hot', wars > 0);
 }
 
-function updateInspector() {
-  if (!world) return;
-  const titleEl = document.getElementById('insp-title');
-  const bodyEl = document.getElementById('insp-body');
+/* ---------------- toolbar ---------------- */
 
-  const u = state.selectedUnit && !state.selectedUnit.dead ? state.selectedUnit : state.hoverUnit;
-  const v = state.selectedVillage || state.hoverVillage;
+function buildRail() {
+  const rail = document.getElementById('rail');
+  rail.innerHTML = TOOL_GROUPS.map(g =>
+    `<button class="rail-btn ${g.id === state.cat ? 'active' : ''}" data-cat="${g.id}" title="${g.label}">
+      <img src="assets/${g.icon}" alt="${g.label}"><span>${g.label}</span>
+    </button>`
+  ).join('');
 
-  if (u && !u.dead) {
-    const faction = u.faction !== null ? FACTIONS[u.faction] : null;
-    const typeName = u.kind === 'villager' ? (u.faction === null ? '流浪者' : '村民')
-      : u.kind === 'soldier' ? '战士'
-      : u.kind === 'monster' ? '怪物' : '野兽';
-    const stateText = u.burning ? '燃烧中' : u.infected ? '患病' : u.target ? '战斗中' : (u.moving ? '行走' : '停留');
-    titleEl.textContent = '生灵档案';
-    bodyEl.innerHTML = `
-      <div class="row"><span>种类</span><span>${typeName} · ${SPRITE_NAMES[u.sprite] || ''}</span></div>
-      <div class="row"><span>部族</span><span style="color:${faction ? faction.color : '#b39a76'}">${faction ? faction.name : '无'}</span></div>
-      <div class="row"><span>生命</span><span>${Math.max(0, Math.round(u.hp))} / ${Math.round(u.maxHp)}</span></div>
-      <div class="row"><span>年龄</span><span>${(u.age / 20).toFixed(1)} 岁</span></div>
-      <div class="row"><span>状态</span><span class="tag">${stateText}</span></div>`;
-    return;
+  rail.querySelectorAll('.rail-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.cat = btn.dataset.cat;
+      const group = TOOL_GROUPS.find(g => g.id === state.cat);
+      state.tool = group.tools[0].id;
+      buildRail();
+      buildTools();
+      updateToolState();
+    });
+  });
+}
+
+function buildTools() {
+  const group = TOOL_GROUPS.find(g => g.id === state.cat) || TOOL_GROUPS[0];
+  document.getElementById('tool-panel-title').textContent = group.label;
+  const wrap = document.getElementById('tools');
+  wrap.innerHTML = group.tools.map(t =>
+    `<button class="tool ${t.id === state.tool ? 'active' : ''}" data-tool="${t.id}" title="${t.hint}">
+      <img src="assets/${t.icon}" alt="${t.name}"><span>${t.name}</span>
+    </button>`
+  ).join('');
+
+  wrap.querySelectorAll('.tool').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.tool = btn.dataset.tool;
+      wrap.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === state.tool));
+      updateToolState();
+    });
+  });
+}
+
+function updateToolState() {
+  const info = TOOL_INFO[state.tool];
+  document.getElementById('tool-hint').textContent = info ? info.hint : '';
+  document.getElementById('brush-size').textContent = state.brush;
+  const brushRow = document.querySelector('.brush-row');
+  const usable = CONTINUOUS.has(state.tool);
+  brushRow.classList.toggle('disabled', !usable);
+}
+
+/* ---------------- inspector ---------------- */
+
+function showInspector() {
+  document.getElementById('inspector').classList.remove('hidden');
+}
+
+function hideInspector() {
+  document.getElementById('inspector').classList.add('hidden');
+  state.selectedUnit = null;
+  state.selectedVillage = null;
+  state.selectedTile = null;
+}
+
+function clearSelection() {
+  state.selectedUnit = null;
+  state.selectedVillage = null;
+  state.selectedTile = null;
+  hideInspector();
+}
+
+function unitDisplayName(u) {
+  if (u.king) return `${FACTIONS[u.faction].name}国王`;
+  if (u.kind === 'soldier') return '战士';
+  if (u.kind === 'zombie' || (u.kind === 'monster' && u.sprite === 'zombie')) return '僵尸';
+  if (u.kind === 'monster') return SPRITE_NAMES[u.sprite] || '怪物';
+  if (u.kind === 'beast') return SPRITE_NAMES[u.sprite] || '野兽';
+  return u.faction !== null ? '村民' : '流浪者';
+}
+
+function showUnit(u) {
+  state.selectedUnit = u;
+  state.selectedVillage = null;
+  state.selectedTile = null;
+  showInspector();
+  const faction = u.faction !== null ? FACTIONS[u.faction].name : '无阵营';
+  const hpPct = Math.max(0, Math.min(100, u.hp / u.maxHp * 100));
+  const rows = [
+    ['阵营', faction],
+    ['身份', u.king ? '国王' : (JOB_NAMES[u.job] || '平民')],
+    ['生命', `${Math.ceil(u.hp)} / ${Math.round(u.maxHp)}`],
+    ['年龄', `${Math.floor(u.age)} 岁`],
+    ['战力', u.dmg.toFixed(1)]
+  ];
+  if (u.burning) rows.push(['状态', '<span class="tag">燃烧中</span>']);
+  if (u.infected) rows.push(['状态', '<span class="tag">染病</span>']);
+
+  document.getElementById('insp-kicker').textContent = u.kind === 'monster' ? 'MONSTER' : u.kind === 'beast' ? 'WILDLIFE' : 'LIFE';
+  document.getElementById('insp-title').textContent = unitDisplayName(u);
+  document.getElementById('insp-body').innerHTML =
+    rows.map(r => `<div class="row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('') +
+    `<div class="bar"><i style="width:${hpPct}%"></i></div>`;
+
+  const actions = [];
+  actions.push(`<button class="act-btn" data-act="heal-unit">治愈</button>`);
+  if (u.faction !== null && u.kind === 'villager') actions.push(`<button class="act-btn" data-act="recruit-unit">招募为战士</button>`);
+  if (u.faction !== null && !u.king) actions.push(`<button class="act-btn hot" data-act="exile-unit">放逐</button>`);
+  actions.push(`<button class="act-btn hot" data-act="smite-unit">降下雷霆</button>`);
+  document.getElementById('insp-actions').innerHTML = actions.join('');
+}
+
+function relationStatus(a, b) {
+  if (atWar(a, b)) return { text: '战争', cls: 'war' };
+  if (allied(a, b)) return { text: '同盟', cls: 'ally' };
+  return { text: '和平', cls: '' };
+}
+
+function showVillage(v) {
+  state.selectedVillage = v;
+  state.selectedUnit = null;
+  state.selectedTile = null;
+  showInspector();
+
+  const f = FACTIONS[v.faction];
+  const soldiers = world.units.filter(u => !u.dead && u.homeVillage === v.id && u.job === 'soldier').length;
+  const king = world.units.find(u => u.king && !u.dead && u.homeVillage === v.id);
+  const foodPct = Math.min(100, v.food / 120 * 100);
+  const happyPct = Math.min(100, v.happiness);
+
+  let diplo = '';
+  for (const k of world.kingdoms) {
+    if (k.id === v.faction || k.villages.length === 0) continue;
+    const st = relationStatus(v.faction, k.id);
+    const r = relation(v.faction, k.id);
+    diplo += `<div class="diplo-row">
+      <span class="dname">${FACTIONS[k.id].name}</span>
+      <span class="drel">${r > 0 ? '+' : ''}${r}</span>
+      <span class="dstat ${st.cls}">${st.text}</span>
+      ${atWar(v.faction, k.id)
+        ? `<button class="mini-btn" data-act="dip-peace" data-f="${k.id}">求和</button>`
+        : `<button class="mini-btn" data-act="dip-war" data-f="${k.id}">宣战</button>`}
+      ${(!allied(v.faction, k.id) && !atWar(v.faction, k.id))
+        ? `<button class="mini-btn" data-act="dip-ally" data-f="${k.id}">结盟</button>`
+        : ''}
+      <button class="mini-btn" data-act="dip-gift" data-f="${k.id}">赠礼</button>
+    </div>`;
   }
 
-  if (v) {
-    const faction = FACTIONS[v.faction];
-    titleEl.textContent = '村庄档案';
-    bodyEl.innerHTML = `
-      <div class="row"><span>名称</span><span>${v.name}</span></div>
-      <div class="row"><span>部族</span><span style="color:${faction.color}">${faction.name}</span></div>
-      <div class="row"><span>人口</span><span>${v.pop || 0}</span></div>
-      <div class="row"><span>房屋</span><span>${v.houses.length}</span></div>
-      <div class="row"><span>存粮</span><span>${Math.round(v.food)}</span></div>`;
-    return;
+  document.getElementById('insp-kicker').textContent = v.capital ? 'CAPITAL' : 'SETTLEMENT';
+  document.getElementById('insp-title').textContent = v.name;
+  document.getElementById('insp-body').innerHTML = `
+    <div class="insp-sub">${f.name} · ${v.capital ? '王都' : '村庄'} · 建于 ${v.bornYear} 年</div>
+    <div class="row"><span>人口</span><span>${v.pop} / ${3 + v.houses.length * 3}</span></div>
+    <div class="row"><span>房屋</span><span>${v.houses.length}</span></div>
+    <div class="row"><span>战士</span><span>${soldiers}</span></div>
+    <div class="row"><span>国王</span><span>${king ? '在位' : '空缺'}</span></div>
+    <div class="row"><span>木材</span><span>${Math.floor(v.wood)}</span></div>
+    <div class="insp-section">粮食 ${Math.floor(v.food)} / 120</div>
+    <div class="bar food"><i style="width:${foodPct}%"></i></div>
+    <div class="insp-section">民心 ${Math.floor(v.happiness)}</div>
+    <div class="bar happy"><i style="width:${happyPct}%"></i></div>
+    <div class="insp-section">外交</div>
+    ${diplo || '<div class="row"><span>暂无邻国</span><span></span></div>'}`;
+
+  document.getElementById('insp-actions').innerHTML = `
+    <button class="act-btn" data-act="vil-food">赐粮</button>
+    <button class="act-btn" data-act="vil-house">建屋</button>
+    <button class="act-btn" data-act="vil-soldier">征兵</button>
+    <button class="act-btn" data-act="vil-center">定位村庄</button>`;
+}
+
+function showTerrain(tx, ty) {
+  state.selectedTile = { tx, ty };
+  state.selectedUnit = null;
+  state.selectedVillage = null;
+  showInspector();
+  const t = getTile(tx, ty);
+  const names = { 0: '海洋', 1: '沙地', 2: '草地', 3: '山岩' };
+  const tree = world.trees.get(tx + ',' + ty);
+  const v = nearestVillage(tx * TILE + 8, ty * TILE + 8, 40);
+  document.getElementById('insp-kicker').textContent = 'TERRAIN';
+  document.getElementById('insp-title').textContent = names[t] || '未知';
+  document.getElementById('insp-body').innerHTML = `
+    <div class="row"><span>坐标</span><span>${tx}, ${ty}</span></div>
+    <div class="row"><span>植被</span><span>${tree ? '有' : '无'}</span></div>
+    <div class="row"><span>附近村庄</span><span>${v ? v.name : '无'}</span></div>
+    <div class="row"><span>火焰</span><span>${world.fires.some(f => f.tx === tx && f.ty === ty) ? '燃烧' : '无'}</span></div>`;
+  document.getElementById('insp-actions').innerHTML =
+    (isLand(tx, ty) && canPlaceVillage(tx, ty))
+      ? `<button class="act-btn" data-act="tile-village">在此建村</button>`
+      : '';
+}
+
+function updateInspector(force = false) {
+  const panel = document.getElementById('inspector');
+  if (!force && panel.matches(':hover')) return;
+  const scrollTop = panel.scrollTop;
+  if (state.selectedUnit) {
+    if (state.selectedUnit.dead) { clearSelection(); return; }
+    showUnit(state.selectedUnit);
+  } else if (state.selectedVillage) {
+    if (!world.villages.includes(state.selectedVillage)) { clearSelection(); return; }
+    showVillage(state.selectedVillage);
+  } else if (state.selectedTile) {
+    showTerrain(state.selectedTile.tx, state.selectedTile.ty);
+  }
+  panel.scrollTop = scrollTop;
+}
+
+function bindInspectorActions() {
+  document.getElementById('inspector').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const act = btn.dataset.act;
+    const targetF = btn.dataset.f !== undefined ? Number(btn.dataset.f) : null;
+
+    if (act === 'heal-unit' && state.selectedUnit) {
+      const u = state.selectedUnit;
+      u.hp = u.maxHp; u.burning = false; u.infected = false;
+      addEffect('effects/icons/heal.png', u.x, u.y - 10, 26, 0.7, { vy: -14 });
+      toast('伤势痊愈');
+    } else if (act === 'recruit-unit' && state.selectedUnit) {
+      const u = state.selectedUnit;
+      u.kind = 'soldier'; u.job = 'soldier'; u.hp = 58; u.maxHp = 58; u.dmg = 7; u.sprite = pick(SOLDIER_SPRITES);
+      u.imgPath = factionSpritePath(u.faction, u.sprite);
+      u.img = img(u.imgPath);
+      toast('已招募为战士');
+      log(`${FACTIONS[u.faction].name}征召了一名战士。`, 'war');
+    } else if (act === 'exile-unit' && state.selectedUnit) {
+      const u = state.selectedUnit;
+      u.faction = null; u.homeVillage = null; u.job = 'idle';
+      u.imgPath = `units/${u.sprite}.png`;
+      u.img = img(u.imgPath);
+      toast('已将其放逐');
+    } else if (act === 'smite-unit' && state.selectedUnit) {
+      const u = state.selectedUnit;
+      applyAction('lightning', Math.floor(u.x / TILE), Math.floor(u.y / TILE));
+    } else if (act === 'vil-food' && state.selectedVillage) {
+      state.selectedVillage.food = Math.min(120, state.selectedVillage.food + 40);
+      toast('粮食从天而降');
+      addEffect('effects/icons/spark.png', state.selectedVillage.tx * TILE + 8, state.selectedVillage.ty * TILE, 40, 0.8, { vy: -14 });
+    } else if (act === 'vil-house' && state.selectedVillage) {
+      const v = state.selectedVillage;
+      const spot = findOpenSpot(v.tx, v.ty, 1, 7);
+      if (spot) {
+        addHouse(v, spot.tx, spot.ty);
+        addEffect('effects/icons/spark.png', spot.tx * TILE + 8, spot.ty * TILE + 8, 30, 0.7, { vy: -12 });
+        toast('房屋落成');
+      } else toast('周围没有空地');
+    } else if (act === 'vil-soldier' && state.selectedVillage) {
+      const v = state.selectedVillage;
+      if (v.pop < 4) { toast('人口不足'); return; }
+      spawnSoldier(v);
+      v.food = Math.max(0, v.food - 3);
+      toast('一名战士应征入伍');
+    } else if (act === 'vil-center' && state.selectedVillage) {
+      cam.x = state.selectedVillage.tx * TILE;
+      cam.y = state.selectedVillage.ty * TILE;
+      clampCamera();
+    } else if (act === 'tile-village' && state.selectedTile) {
+      const { tx, ty } = state.selectedTile;
+      if (canPlaceVillage(tx, ty)) {
+        placeVillage(tx, ty);
+        addEffect('effects/fx/magic_05.png', tx * TILE + 8, ty * TILE + 8, 50, 0.8);
+      } else toast('这里无法建立村庄');
+    } else if (act === 'dip-war' && state.selectedVillage && targetF !== null) {
+      declareWar(state.selectedVillage.faction, targetF);
+    } else if (act === 'dip-peace' && state.selectedVillage && targetF !== null) {
+      makePeace(state.selectedVillage.faction, targetF);
+    } else if (act === 'dip-ally' && state.selectedVillage && targetF !== null) {
+      formAlliance(state.selectedVillage.faction, targetF);
+    } else if (act === 'dip-gift' && state.selectedVillage && targetF !== null) {
+      giftRelation(state.selectedVillage.faction, targetF, 15);
+      toast('使者送去了礼物，两国关系改善');
+    }
+    updateInspector(true);
+    updateHUD();
+  });
+}
+
+/* ---------------- minimap ---------------- */
+
+const MINI_W = 180, MINI_H = 110;
+
+function drawMinimap() {
+  const cv = document.getElementById('minimap');
+  if (!cv || !world) return;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(terrainCanvas, 0, 0, terrainCanvas.width, terrainCanvas.height, 0, 0, MINI_W, MINI_H);
+
+  for (const h of world.houses) {
+    ctx.drawImage(h.img, h.tx, h.ty, 4, 4);
   }
 
-  const tx = Math.floor(state.mouse.wx / TILE);
-  const ty = Math.floor(state.mouse.wy / TILE);
-  if (tx >= 0 && ty >= 0 && tx < W && ty < H) {
-    const t = getTile(tx, ty);
-    const names = { 0: '海洋', 1: '沙滩', 2: world.variant[tileIdx(tx, ty)] ? '森林' : '草原', 3: '山岩' };
-    titleEl.textContent = '世界观察';
-    bodyEl.innerHTML = `
-      <div class="row"><span>地形</span><span>${names[t]}</span></div>
-      <div class="row"><span>坐标</span><span>${tx}, ${ty}</span></div>
-      <div class="row"><span>提示</span><span class="tag">左键使用神力</span></div>`;
-  } else {
-    titleEl.textContent = '世界观察';
-    bodyEl.innerHTML = '<div class="row"><span>把鼠标移到世界上查看土地与生灵。</span></div>';
+  const scale = cam.zoom;
+  const viewW = window.innerWidth / (TILE * scale);
+  const viewH = window.innerHeight / (TILE * scale);
+  const vx = cam.x / TILE - viewW / 2;
+  const vy = cam.y / TILE - viewH / 2;
+  ctx.strokeStyle = 'rgba(231,193,118,0.9)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(
+    clamp(vx, 0, W - 1), clamp(vy, 0, H - 1),
+    Math.min(viewW, W), Math.min(viewH, H)
+  );
+}
+
+function bindMinimap() {
+  const cv = document.getElementById('minimap');
+  cv.addEventListener('pointerdown', e => {
+    const rect = cv.getBoundingClientRect();
+    const tx = (e.clientX - rect.left) / rect.width * W;
+    const ty = (e.clientY - rect.top) / rect.height * H;
+    cam.x = tx * TILE;
+    cam.y = ty * TILE;
+    clampCamera();
+  });
+}
+
+/* ---------------- save / load ---------------- */
+
+const SLOT_PREFIX = 'weichen_world_slot_';
+
+function toB64(u8) {
+  let s = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < u8.length; i += chunk) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+  }
+  return btoa(s);
+}
+
+function fromB64(b64) {
+  const s = atob(b64);
+  const u8 = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8;
+}
+
+function serializeWorld() {
+  return {
+    version: 2,
+    seed: world.seed,
+    time: world.time,
+    year: world.year,
+    nextId: world.nextId,
+    nameCount: world.nameCount,
+    terrain: toB64(world.terrain),
+    variant: toB64(world.variant),
+    trees: [...world.trees.values()].map(t => ({ x: t.x, y: t.y, img: t.img, burning: t.burning, burnT: t.burnT })),
+    houses: world.houses.map(h => ({ tx: h.tx, ty: h.ty, imgPath: h.imgPath, villageId: h.villageId, hp: h.hp, burning: h.burning, burnT: h.burnT })),
+    units: world.units.map(u => ({
+      id: u.id, kind: u.kind, faction: u.faction, sprite: u.sprite, imgPath: u.imgPath,
+      job: u.job, x: u.x, y: u.y, hp: u.hp, maxHp: u.maxHp, speed: u.speed, dmg: u.dmg,
+      age: u.age, maxAge: u.maxAge, homeVillage: u.homeVillage, burning: u.burning,
+      infected: u.infected, infectedT: u.infectedT, king: u.king, face: u.face, phase: u.phase
+    })),
+    villages: world.villages.map(v => ({
+      id: v.id, faction: v.faction, name: v.name, tx: v.tx, ty: v.ty, radius: v.radius,
+      food: v.food, wood: v.wood, stone: v.stone, pop: v.pop, happiness: v.happiness,
+      capital: v.capital, spawnCd: v.spawnCd, buildCd: v.buildCd, soldierCd: v.soldierCd,
+      kingCd: v.kingCd, bornYear: v.bornYear, razeCd: v.razeCd || 0
+    })),
+    fires: world.fires,
+    log: world.log,
+    rels: world.rels,
+    wars: [...world.wars],
+    allies: [...world.allies],
+    warTimers: world.warTimers,
+    kingdoms: world.kingdoms.map(k => ({ id: k.id, capital: k.capital, villages: k.villages.slice(), king: k.king }))
+  };
+}
+
+function deserializeWorld(data) {
+  world = {
+    seed: data.seed || 1,
+    timers: {},
+    terrain: fromB64(data.terrain),
+    variant: fromB64(data.variant),
+    trees: new Map(),
+    houses: [],
+    units: [],
+    villages: data.villages.map(v => ({ ...v, houses: [] })),
+    effects: [],
+    decals: [],
+    fires: data.fires || [],
+    volcanoes: [],
+    tornado: null,
+    log: data.log || [],
+    time: data.time || 0,
+    year: data.year || 1,
+    nextId: data.nextId || 1,
+    nameCount: data.nameCount || {},
+    rels: data.rels,
+    wars: new Set(data.wars || []),
+    allies: new Set(data.allies || []),
+    warTimers: data.warTimers || {},
+    kingdoms: data.kingdoms.map(k => ({ ...k, villages: k.villages.slice() }))
+  };
+
+  for (const t of data.trees || []) {
+    world.trees.set(t.x + ',' + t.y, { x: t.x, y: t.y, img: t.img, burning: t.burning, burnT: t.burnT, hp: 18 });
+  }
+  for (const h of data.houses || []) {
+    const hh = { ...h, img: img(h.imgPath) };
+    world.houses.push(hh);
+    const v = world.villages.find(vv => vv.id === hh.villageId);
+    if (v) v.houses.push(hh);
+  }
+  for (const raw of data.units || []) {
+    const u = { ...raw, img: img(raw.imgPath || `units/${raw.sprite}.png`), target: null, hasTarget: false, dead: false, moving: false, atkCd: 0, thinkCd: 0.2, workCd: 0 };
+    world.units.push(u);
+  }
+
+  terrainCanvas = terrainCanvas || document.createElement('canvas');
+  terrainCtx = terrainCanvas.getContext('2d');
+  terrainCanvas.width = W * TILE;
+  terrainCanvas.height = H * TILE;
+  renderTerrainAll();
+
+  state.selectedUnit = null;
+  state.selectedVillage = null;
+  state.selectedTile = null;
+  hideInspector();
+  state.speed = 1;
+  document.querySelectorAll('.speed').forEach(b => b.classList.toggle('active', b.dataset.speed === '1'));
+
+  const cap = world.villages[0];
+  if (cap) { cam.x = cap.tx * TILE; cam.y = cap.ty * TILE; }
+  clampCamera();
+  renderLog();
+  updateHUD();
+  drawMinimap();
+}
+
+function saveSlot(i) {
+  try {
+    localStorage.setItem(SLOT_PREFIX + i, JSON.stringify(serializeWorld()));
+    toast(`已保存到存档 ${i}`);
+    renderSlots();
+  } catch (err) {
+    toast('保存失败：存储空间不足');
   }
 }
 
-/* ---------------- input ---------------- */
+function loadSlot(i) {
+  const raw = localStorage.getItem(SLOT_PREFIX + i);
+  if (!raw) { toast('该存档为空'); return; }
+  try {
+    deserializeWorld(JSON.parse(raw));
+    document.getElementById('save-menu').classList.add('hidden');
+    toast('世界已读取');
+  } catch (err) {
+    console.error(err);
+    toast('存档损坏，无法读取');
+  }
+}
+
+function slotInfo(i) {
+  const raw = localStorage.getItem(SLOT_PREFIX + i);
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    const pop = (d.units || []).filter(u => u.faction !== null && u.kind !== 'monster' && u.kind !== 'beast').length;
+    return { year: d.year, pop, villages: (d.villages || []).length, time: d.time };
+  } catch (e) { return null; }
+}
+
+function renderSlots() {
+  const el = document.getElementById('slots');
+  if (!el) return;
+  let html = '';
+  for (let i = 1; i <= 3; i++) {
+    const info = slotInfo(i);
+    html += `<div class="slot">
+      <span class="slot-name">存档 ${i}</span>
+      <span class="slot-info">${info ? `第 ${info.year} 年 · 人口 ${info.pop} · 村庄 ${info.villages}` : '空'}</span>
+      <button class="ghost-btn mini" data-slot-save="${i}">保存</button>
+      <button class="ghost-btn mini" data-slot-load="${i}">读取</button>
+    </div>`;
+  }
+  el.innerHTML = html;
+
+  el.querySelectorAll('[data-slot-save]').forEach(b => b.addEventListener('click', () => saveSlot(Number(b.dataset.slotSave))));
+  el.querySelectorAll('[data-slot-load]').forEach(b => b.addEventListener('click', () => loadSlot(Number(b.dataset.slotLoad))));
+}
+
+function exportSave() {
+  const blob = new Blob([JSON.stringify(serializeWorld())], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `微尘世界-第${world.year}年.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('存档已导出');
+}
+
+function importSave(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      deserializeWorld(JSON.parse(reader.result));
+      document.getElementById('save-menu').classList.add('hidden');
+      toast('存档已导入');
+    } catch (err) {
+      console.error(err);
+      toast('文件无法识别');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function screenshot() {
+  const a = document.createElement('a');
+  a.href = document.getElementById('world').toDataURL('image/png');
+  a.download = `微尘世界-第${world.year}年.png`;
+  a.click();
+  toast('截图已保存');
+}
+
+/* ---------------- camera & input ---------------- */
 
 function screenToWorld(sx, sy) {
-  return { x: cam.x + sx / cam.zoom, y: cam.y + sy / cam.zoom };
-}
-
-function zoomBy(factor, sx = window.innerWidth / 2, sy = window.innerHeight / 2) {
-  const before = screenToWorld(sx, sy);
-  cam.zoom = clamp(cam.zoom * factor, 0.55, 3.4);
-  const after = screenToWorld(sx, sy);
-  cam.x += before.x - after.x;
-  cam.y += before.y - after.y;
-  clampCamera();
+  const rect = document.getElementById('world').getBoundingClientRect();
+  return {
+    x: (sx - rect.left - rect.width / 2) / cam.zoom + cam.x,
+    y: (sy - rect.top - rect.height / 2) / cam.zoom + cam.y
+  };
 }
 
 function clampCamera() {
   const vw = window.innerWidth / cam.zoom;
   const vh = window.innerHeight / cam.zoom;
-  const ww = W * TILE, wh = H * TILE;
+  const worldW = W * TILE;
+  const worldH = H * TILE;
+  if (vw >= worldW) cam.x = worldW / 2;
+  else cam.x = clamp(cam.x, vw / 2, worldW - vw / 2);
+  if (vh >= worldH) cam.y = worldH / 2;
+  else cam.y = clamp(cam.y, vh / 2, worldH - vh / 2);
+}
 
-  if (vw >= ww) cam.x = (ww - vw) / 2;
-  else cam.x = clamp(cam.x, 0, ww - vw);
-  if (vh >= wh) cam.y = (wh - vh) / 2;
-  else cam.y = clamp(cam.y, 0, wh - vh);
+function zoomBy(factor) {
+  cam.zoom = clamp(cam.zoom * factor, 0.45, 3.4);
+  clampCamera();
 }
 
 function pickAt(wx, wy) {
-  let bestUnit = null, bd = 13 * 13;
-  for (const u of world.units) {
-    if (u.dead) continue;
-    const d = dist2(wx, wy, u.x, u.y - 7);
-    if (d < bd) { bd = d; bestUnit = u; }
-  }
-  let bestVillage = null;
   for (const h of world.houses) {
-    if (wx >= h.tx * TILE - 10 && wx <= h.tx * TILE + 26 && wy >= h.ty * TILE - 20 && wy <= h.ty * TILE + 20) {
-      bestVillage = world.villages.find(v => v.id === h.villageId) || null;
-      break;
+    const cx = h.tx * TILE + 8;
+    const cy = h.ty * TILE + 2;
+    if (Math.abs(wx - cx) <= 18 && wy >= h.ty * TILE - 24 && wy <= h.ty * TILE + 30) {
+      const v = world.villages.find(vv => vv.id === h.villageId);
+      if (v) return { type: 'village', village: v };
     }
   }
-  return { unit: bestUnit, village: bestVillage };
+
+  let best = null, bd = 14 * 14;
+  for (const u of world.units) {
+    if (u.dead) continue;
+    const d = dist2(wx, wy, u.x, u.y - 6);
+    if (d < bd) { bd = d; best = u; }
+  }
+  if (best) return { type: 'unit', unit: best };
+
+  const v = nearestVillage(wx, wy, 40);
+  if (v) return { type: 'village', village: v };
+
+  return { type: 'terrain', tx: Math.floor(wx / TILE), ty: Math.floor(wy / TILE) };
 }
 
-function onPointerDown(e) {
-  if (e.button === 2 || e.button === 1) {
-    state.panning = true;
-    state.pan = { sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y };
-    return;
-  }
-  if (e.button !== 0) return;
-
-  const w = screenToWorld(e.clientX, e.clientY);
-  const tx = Math.floor(w.x / TILE);
-  const ty = Math.floor(w.y / TILE);
-
+function useToolAt(wx, wy) {
+  const tx = clamp(Math.floor(wx / TILE), 0, W - 1);
+  const ty = clamp(Math.floor(wy / TILE), 0, H - 1);
   if (state.tool === 'select') {
-    const found = pickAt(w.x, w.y);
-    state.selectedUnit = found.unit;
-    state.selectedVillage = found.unit ? null : found.village;
-    updateInspector();
+    const hit = pickAt(wx, wy);
+    if (hit.type === 'unit') showUnit(hit.unit);
+    else if (hit.type === 'village') showVillage(hit.village);
+    else showTerrain(hit.tx, hit.ty);
     return;
   }
-
   if (ACTIONS.has(state.tool)) {
     applyAction(state.tool, tx, ty);
     return;
   }
-
-  state.painting = true;
-  state.lastPaint = { x: w.x, y: w.y };
-  applyBrush(state.tool, tx, ty);
-}
-
-function onPointerMove(e) {
-  const rect = canvas.getBoundingClientRect();
-  const sx = e.clientX - rect.left;
-  const sy = e.clientY - rect.top;
-
-  if (state.panning && state.pan) {
-    cam.x = state.pan.cx - (e.clientX - state.pan.sx) / cam.zoom;
-    cam.y = state.pan.cy - (e.clientY - state.pan.sy) / cam.zoom;
-    clampCamera();
+  if (CONTINUOUS.has(state.tool)) {
+    applyBrush(state.tool, tx, ty);
     return;
   }
+}
 
-  const w = screenToWorld(sx, sy);
-  state.mouse.sx = sx;
-  state.mouse.sy = sy;
-  state.mouse.wx = w.x;
-  state.mouse.wy = w.y;
-  state.mouse.inside = true;
+function bindInput() {
+  const cvs = document.getElementById('world');
 
-  const found = pickAt(w.x, w.y);
-  state.hoverUnit = found.unit;
-  state.hoverVillage = found.village;
+  cvs.addEventListener('contextmenu', e => e.preventDefault());
 
-  if (!state.painting) return;
+  cvs.addEventListener('pointerdown', e => {
+    cvs.setPointerCapture(e.pointerId);
+    if (e.button === 2 || e.button === 1) {
+      state.panning = true;
+      state.pan = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y };
+      return;
+    }
+    if (e.button !== 0) return;
+    const p = screenToWorld(e.clientX, e.clientY);
+    if (e.pointerType === 'touch') {
+      state.touch = {
+        id: e.pointerId, startX: e.clientX, startY: e.clientY,
+        camX: cam.x, camY: cam.y, wx: p.x, wy: p.y, used: false, at: performance.now()
+      };
+      return;
+    }
+    state.painting = true;
+    state.lastPaint = { tx: Math.floor(p.x / TILE), ty: Math.floor(p.y / TILE) };
+    useToolAt(p.x, p.y);
+  });
 
-  const last = state.lastPaint;
-  if (!last) return;
-  const d = Math.hypot(w.x - last.x, w.y - last.y);
-  const stepLen = Math.max(6, state.brush * TILE * 0.55);
-  const now = performance.now();
+  cvs.addEventListener('pointermove', e => {
+    const p = screenToWorld(e.clientX, e.clientY);
+    state.mouse.sx = e.clientX;
+    state.mouse.sy = e.clientY;
+    state.mouse.wx = p.x;
+    state.mouse.wy = p.y;
+    state.mouse.inside = true;
 
-  if (d > stepLen) {
-    const steps = Math.min(12, Math.floor(d / stepLen));
-    for (let i = 1; i <= steps; i++) {
-      const px = last.x + (w.x - last.x) * (i / steps);
-      const py = last.y + (w.y - last.y) * (i / steps);
-      const tx = Math.floor(px / TILE);
-      const ty = Math.floor(py / TILE);
-      if (state.tool === 'human' || state.tool === 'beast' || state.tool === 'monster') {
-        if (now - state.lastSpawnAt > 260) {
-          applyBrush(state.tool, tx, ty);
-          state.lastSpawnAt = now;
+    if (state.touch && e.pointerId === state.touch.id) {
+      const dx = e.clientX - state.touch.startX;
+      const dy = e.clientY - state.touch.startY;
+      if (!state.touch.used && Math.hypot(dx, dy) > 10) state.touch.used = true;
+      if (state.touch.used) {
+        cam.x = state.touch.camX - dx / cam.zoom;
+        cam.y = state.touch.camY - dy / cam.zoom;
+        clampCamera();
+      }
+      return;
+    }
+
+    if (state.panning && state.pan) {
+      cam.x = state.pan.cx - (e.clientX - state.pan.x) / cam.zoom;
+      cam.y = state.pan.cy - (e.clientY - state.pan.y) / cam.zoom;
+      clampCamera();
+      return;
+    }
+
+    if (state.painting && CONTINUOUS.has(state.tool)) {
+      const tx = Math.floor(p.x / TILE);
+      const ty = Math.floor(p.y / TILE);
+      if (state.lastPaint && (tx !== state.lastPaint.tx || ty !== state.lastPaint.ty)) {
+        if (state.tool === 'human' || state.tool === 'beast' || state.tool === 'monster') {
+          const now = performance.now();
+          if (now - state.lastSpawnAt > 90) {
+            state.lastSpawnAt = now;
+            useToolAt(p.x, p.y);
+          }
+        } else {
+          useToolAt(p.x, p.y);
         }
-      } else if (state.tool === 'fire' || state.tool === 'plague' || state.tool === 'heal' || state.tool === 'clear') {
-        if (now - state.lastFxAt > 90) {
-          applyBrush(state.tool, tx, ty);
-          state.lastFxAt = now;
-        }
-      } else {
-        applyBrush(state.tool, tx, ty);
+        state.lastPaint = { tx, ty };
       }
     }
-    state.lastPaint = { x: w.x, y: w.y };
-  }
+  });
+
+  const end = e => {
+    if (state.touch) {
+      const t = state.touch;
+      if (!t.used && performance.now() - t.at < 700) useToolAt(t.wx, t.wy);
+      state.touch = null;
+    }
+    state.painting = false;
+    state.panning = false;
+    state.pan = null;
+  };
+  cvs.addEventListener('pointerup', end);
+  cvs.addEventListener('pointercancel', end);
+  cvs.addEventListener('pointerleave', e => {
+    state.mouse.inside = false;
+    if (e.pointerType !== 'touch') end(e);
+  });
+
+  cvs.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 1.12 : 0.89);
+  }, { passive: false });
+
+  window.addEventListener('keydown', e => {
+    if (e.target && e.target.tagName === 'INPUT') return;
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); setSpeed(state.speed === 0 ? (state.lastSpeed || 1) : 0); }
+    else if (k === '1') setSpeed(1);
+    else if (k === '2') setSpeed(2);
+    else if (k === '3') setSpeed(4);
+    else if (k === '0') setSpeed(0);
+    else if (k === '+' || k === '=') { state.brush = clamp(state.brush + 1, 1, 10); updateToolState(); }
+    else if (k === '-') { state.brush = clamp(state.brush - 1, 1, 10); updateToolState(); }
+    else if (k === 's' || k === 'l') openSaveMenu();
+    else if (k === 'f') screenshot();
+    else if (k === 'escape') {
+      document.getElementById('help').classList.add('hidden');
+      document.getElementById('save-menu').classList.add('hidden');
+      clearSelection();
+    }
+    else if (k === 'arrowleft' || k === 'a') { cam.x -= 46 / cam.zoom; clampCamera(); }
+    else if (k === 'arrowright' || k === 'd') { cam.x += 46 / cam.zoom; clampCamera(); }
+    else if (k === 'arrowup' || k === 'w') { cam.y -= 46 / cam.zoom; clampCamera(); }
+    else if (k === 'arrowdown') { cam.y += 46 / cam.zoom; clampCamera(); }
+  });
+
+  window.addEventListener('resize', resizeCanvas);
 }
 
-function onPointerUp() {
-  state.painting = false;
-  state.panning = false;
-  state.pan = null;
-  state.lastPaint = null;
-}
-
-function onWheel(e) {
-  e.preventDefault();
-  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-  zoomBy(factor, e.clientX, e.clientY);
+function setSpeed(v) {
+  state.speed = v;
+  if (v > 0) state.lastSpeed = v;
+  document.querySelectorAll('.speed').forEach(b => b.classList.toggle('active', Number(b.dataset.speed) === v));
 }
 
 /* ---------------- rendering ---------------- */
 
-const canvas = document.getElementById('world');
-const ctx = canvas.getContext('2d');
+let dpr = Math.min(2, window.devicePixelRatio || 1);
 
-let lastTime = 0;
-let acc = 0;
-let lastHud = 0;
-let dpr = window.devicePixelRatio || 1;
-
-function resize() {
-  dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(window.innerWidth * dpr);
-  canvas.height = Math.floor(window.innerHeight * dpr);
-  canvas.style.width = window.innerWidth + 'px';
-  canvas.style.height = window.innerHeight + 'px';
-  ctx.imageSmoothingEnabled = false;
+function resizeCanvas() {
+  const cvs = document.getElementById('world');
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  cvs.width = Math.floor(window.innerWidth * dpr);
+  cvs.height = Math.floor(window.innerHeight * dpr);
   clampCamera();
 }
 
-function render(now) {
-  const dt = Math.min(0.06, (now - lastTime) / 1000 || 0);
-
-  if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 40);
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#12303f';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const shakeX = state.shake ? rand(-state.shake, state.shake) * dpr : 0;
-  const shakeY = state.shake ? rand(-state.shake, state.shake) * dpr : 0;
-
-  ctx.imageSmoothingEnabled = false;
-  ctx.setTransform(dpr * cam.zoom, 0, 0, dpr * cam.zoom, -cam.x * dpr * cam.zoom + shakeX, -cam.y * dpr * cam.zoom + shakeY);
-
-  const vw = window.innerWidth / cam.zoom;
-  const vh = window.innerHeight / cam.zoom;
-  const view = { x0: cam.x - 40, y0: cam.y - 40, x1: cam.x + vw + 40, y1: cam.y + vh + 40 };
-
-  ctx.drawImage(terrainCanvas, 0, 0);
-  drawDecals(view);
-  drawEntities(view, now);
-  drawEffects();
-  drawBrush(now);
+function drawTree(tree) {
+  const size = 20;
+  const px = tree.x * TILE + 8 - size / 2;
+  const py = tree.y * TILE + 14 - size;
+  ctxDrawImage(img(tree.img), px, py, size, size);
 }
 
-function drawDecals(view) {
-  for (const d of world.decals) {
-    if (d.x < view.x0 || d.y < view.y0 || d.x > view.x1 || d.y > view.y1) continue;
-    const a = Math.min(1, d.life / d.maxLife + 0.15);
-    ctx.globalAlpha = a;
-    ctx.drawImage(d.img, d.x - d.size / 2, d.y - d.size / 2, d.size, d.size);
-  }
-  ctx.globalAlpha = 1;
+function drawHouse(h) {
+  const size = 34;
+  const px = h.tx * TILE + 8 - size / 2;
+  const py = h.ty * TILE + 26 - size;
+  ctxDrawImage(h.img, px, py, size, size);
 }
 
-const flamePaths = [
-  'effects/fx/flame_01.png', 'effects/fx/flame_02.png', 'effects/fx/flame_03.png',
-  'effects/fx/flame_04.png', 'effects/fx/flame_05.png', 'effects/fx/flame_06.png'
-];
+const ctxState = { ctx: null };
 
-function drawEntities(view, now) {
-  const items = [];
-
-  for (const tree of world.trees.values()) {
-    const px = tree.x * TILE, py = tree.y * TILE;
-    if (px < view.x0 - 24 || py < view.y0 - 24 || px > view.x1 || py > view.y1) continue;
-    items.push({ y: py + 16, type: 0, obj: tree });
-  }
-  for (const h of world.houses) {
-    const px = h.tx * TILE, py = h.ty * TILE;
-    if (px < view.x0 - 40 || py < view.y0 - 40 || px > view.x1 || py > view.y1) continue;
-    items.push({ y: py + 16, type: 1, obj: h });
-  }
-  for (const u of world.units) {
-    if (u.dead) continue;
-    if (u.x < view.x0 - 24 || u.y < view.y0 - 24 || u.x > view.x1 || u.y > view.y1) continue;
-    items.push({ y: u.y, type: 2, obj: u });
-  }
-
-  items.sort((a, b) => a.y - b.y);
-
-  for (const it of items) {
-    if (it.type === 0) drawTree(it.obj, now);
-    else if (it.type === 1) drawHouse(it.obj, now);
-    else drawUnit(it.obj, now);
-  }
+function ctxDrawImage(im, x, y, w, h) {
+  ctxState.ctx.drawImage(im, x, y, w, h);
 }
 
-function drawTree(tree, now) {
-  const cx = tree.x * TILE + TILE / 2;
-  const by = tree.y * TILE + TILE;
-  const size = tree.img === 'nature/deadtree.png' ? 22 : (tree.img.indexOf('/tree') >= 0 ? 26 : 18);
-  const px = cx - size / 2;
-  const py = by - size;
-  ctx.drawImage(img(tree.img), px, py, size, size);
-  if (tree.burning) {
-    ctx.globalAlpha = 0.55 + Math.sin(now / 90 + tree.x) * 0.12;
-    ctx.drawImage(img('effects/icons/fire_aura.png'), px - 2, py - 2, size + 4, size + 4);
-    ctx.globalAlpha = 1;
-  }
-}
-
-function drawHouse(h, now) {
-  const px = h.tx * TILE - 8;
-  const py = h.ty * TILE - 16;
-  ctx.drawImage(h.img, px, py);
-  if (h.burning) {
-    ctx.globalAlpha = 0.55 + Math.sin(now / 80 + h.tx) * 0.12;
-    ctx.drawImage(img('effects/icons/fire_aura.png'), h.tx * TILE - 8, h.ty * TILE - 8, 32, 32);
-    ctx.globalAlpha = 1;
-  }
-}
-
-function drawUnit(u, now) {
-  const px = Math.round(u.x);
-  const py = Math.round(u.y);
-  const bob = u.moving ? Math.sin(now / 130 + u.phase) * 1.2 : 0;
-
-  if (u.burning) {
-    ctx.globalAlpha = 0.5;
-    ctx.drawImage(img('effects/icons/fire_aura.png'), px - 11, py - 20 + bob, 22, 22);
-    ctx.globalAlpha = 1;
-  } else if (u.infected) {
-    ctx.globalAlpha = 0.42 + Math.sin(now / 180 + u.phase) * 0.1;
-    ctx.drawImage(img('effects/icons/poison_aura.png'), px - 10, py - 19 + bob, 20, 20);
-    ctx.globalAlpha = 1;
-  }
-
-  if (u.faction !== null) {
-    ctx.globalAlpha = 0.3;
-    ctx.drawImage(img('effects/fx/circle_02.png'), px - 9, py - 3, 18, 9);
-    ctx.globalAlpha = 1;
-  }
+function drawUnit(u) {
+  const ctx = ctxState.ctx;
+  const bob = u.moving ? Math.sin(world.time * 11 + u.phase) * 1.2 : 0;
+  const size = u.king ? 20 : 16;
+  const px = u.x - size / 2;
+  const py = u.y - size + bob;
 
   ctx.save();
   if (u.face < 0) {
-    ctx.translate(px, 0);
+    ctx.translate(u.x, 0);
     ctx.scale(-1, 1);
-    ctx.drawImage(u.img, -8, py - 16 + bob);
-  } else {
-    ctx.drawImage(u.img, px - 8, py - 16 + bob);
+    ctx.translate(-u.x, 0);
   }
+  if (u.burning) ctx.globalAlpha = 0.95;
+  ctx.drawImage(u.img, px, py, size, size);
   ctx.restore();
 
-  if (state.selectedUnit === u) {
-    ctx.globalAlpha = 0.8;
-    ctx.drawImage(img('effects/icons/ring.png'), px - 12, py - 6, 24, 24);
+  if (u.king) {
+    ctx.drawImage(img('icons/star.png'), u.x - 5, py - 12, 10, 10);
+  }
+
+  if (u === state.hoverUnit && u !== state.selectedUnit) {
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(img('effects/fx/circle_02.png'), u.x - 11, u.y - 10, 22, 22);
     ctx.globalAlpha = 1;
   }
 }
 
 function drawEffects() {
+  const ctx = ctxState.ctx;
+  for (const d of world.decals) {
+    const a = clamp(d.life / d.maxLife, 0, 1);
+    ctx.globalAlpha = 0.45 * a;
+    ctx.drawImage(d.img, d.x - d.size / 2, d.y - d.size / 2, d.size, d.size);
+  }
+  ctx.globalAlpha = 1;
+
   for (const e of world.effects) {
-    const t = Math.max(0, e.life / e.maxLife);
-    ctx.globalAlpha = Math.min(1, t * 1.6);
-    if (e.rot) {
-      ctx.save();
+    const t = clamp(e.life / e.maxLife, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, t * 1.5);
+    if (e.rot !== 0) {
       ctx.translate(e.x, e.y);
       ctx.rotate(e.rot);
       ctx.drawImage(e.img, -e.size / 2, -e.size / 2, e.size, e.size);
-      ctx.restore();
     } else {
       ctx.drawImage(e.img, e.x - e.size / 2, e.y - e.size / 2, e.size, e.size);
     }
+    ctx.restore();
   }
+
+  if (world.tornado) {
+    const t = world.tornado;
+    for (let i = 0; i < 5; i++) {
+      const ang = world.time * 6 + i * 1.2;
+      const r = 8 + i * 7;
+      const size = 26 + i * 9;
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.translate(t.x + Math.cos(ang) * r, t.y - i * 14 + Math.sin(ang) * 4);
+      ctx.rotate(ang * 0.6);
+      ctx.drawImage(img(i % 2 ? 'effects/fx/smoke_01.png' : 'effects/fx/magic_05.png'), -size / 2, -size / 2, size, size);
+      ctx.restore();
+    }
+  }
+}
+
+function drawBrush() {
+  if (!state.mouse.inside) return;
+  const ctx = ctxState.ctx;
+  const tx = clamp(Math.floor(state.mouse.wx / TILE), 0, W - 1);
+  const ty = clamp(Math.floor(state.mouse.wy / TILE), 0, H - 1);
+  const size = (state.brush * 2 + 1) * TILE;
+  const cx = tx * TILE + TILE / 2;
+  const cy = ty * TILE + TILE / 2;
+
+  if (state.tool === 'select') {
+    ctx.globalAlpha = 0.6;
+    ctx.drawImage(img('icons/target.png'), cx - 14, cy - 14, 28, 28);
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  ctx.globalAlpha = CONTINUOUS.has(state.tool) ? 0.4 : 0.7;
+  ctx.drawImage(img('effects/fx/circle_02.png'), cx - size / 2, cy - size / 2, size, size);
   ctx.globalAlpha = 1;
 }
 
-function drawBrush(now) {
-  if (!state.mouse.inside || state.panning) return;
-  let x = state.mouse.wx, y = state.mouse.wy;
-  if (state.painting) { x = state.lastPaint ? state.lastPaint.x : x; y = state.lastPaint ? state.lastPaint.y : y; }
-  const size = state.tool === 'select' ? 20 : (state.brush * 2 + 1) * TILE;
+function render() {
+  const cvs = document.getElementById('world');
+  const ctx = cvs.getContext('2d');
+  ctxState.ctx = ctx;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+
+  ctx.fillStyle = '#10222f';
+  ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+  const shakeX = state.shake > 0 ? rand(-state.shake, state.shake) : 0;
+  const shakeY = state.shake > 0 ? rand(-state.shake, state.shake) : 0;
+  state.shake *= 0.88;
+  if (state.shake < 0.3) state.shake = 0;
+
   ctx.save();
-  ctx.globalAlpha = 0.55 + Math.sin(now / 320) * 0.12;
-  ctx.translate(x, y);
-  ctx.rotate(now / 6000);
-  ctx.drawImage(img('effects/fx/circle_02.png'), -size / 2, -size / 2, size, size);
+  ctx.translate(window.innerWidth / 2 + shakeX, window.innerHeight / 2 + shakeY);
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-cam.x, -cam.y);
+
+  ctx.drawImage(terrainCanvas, 0, 0);
+
+  if (state.selectedVillage) {
+    const v = state.selectedVillage;
+    const size = v.radius * TILE * 2;
+    ctx.globalAlpha = 0.12;
+    ctx.drawImage(img('effects/fx/circle_02.png'), v.tx * TILE + 8 - size / 2, v.ty * TILE + 8 - size / 2, size, size);
+    ctx.globalAlpha = 1;
+  }
+
+  for (const tree of world.trees.values()) drawTree(tree);
+  for (const h of world.houses) drawHouse(h);
+
+  const sorted = world.units.filter(u => !u.dead).sort((a, b) => a.y - b.y);
+  for (const u of sorted) drawUnit(u);
+
+  if (state.selectedUnit && !state.selectedUnit.dead) {
+    const u = state.selectedUnit;
+    ctx.globalAlpha = 0.8;
+    ctx.drawImage(img('effects/fx/circle_02.png'), u.x - 13, u.y - 12, 26, 26);
+    ctx.globalAlpha = 1;
+  }
+
+  drawEffects();
+  drawBrush();
+
   ctx.restore();
-  ctx.globalAlpha = 1;
 }
 
-/* ---------------- world lifecycle ---------------- */
+/* ---------------- world creation ---------------- */
 
 function newWorld(seed) {
+  seed = seed || ((Math.random() * 1e9) | 0);
   world = {
     seed,
+    time: 0,
+    year: 1,
+    nextId: 1,
+    nameCount: {},
     terrain: new Uint8Array(W * H),
     variant: new Uint8Array(W * H),
     trees: new Map(),
@@ -1765,122 +2728,227 @@ function newWorld(seed) {
     effects: [],
     decals: [],
     fires: [],
+    volcanoes: [],
+    tornado: null,
     log: [],
-    time: 0,
-    year: 1,
-    atWar: false,
-    warTimer: 0,
-    nextId: 1,
-    nameCount: {}
+    rels: Array.from({ length: 4 }, (_, i) => Array.from({ length: 4 }, (_, j) => i === j ? 100 : 0)),
+    wars: new Set(),
+    allies: new Set(),
+    warTimers: {},
+    kingdoms: FACTIONS.map((f, i) => ({ id: i, capital: null, villages: [], king: null }))
   };
 
-  generateTerrain(seed);
-  scatterNature();
-
-  state.selectedUnit = null;
-  state.selectedVillage = null;
-  state.hoverUnit = null;
-  state.hoverVillage = null;
-  state.painting = false;
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      const r = Math.round(rand(-24, 38));
+      world.rels[i][j] = r;
+      world.rels[j][i] = r;
+    }
+  }
 
   if (!terrainCanvas) {
     terrainCanvas = document.createElement('canvas');
     terrainCanvas.width = W * TILE;
     terrainCanvas.height = H * TILE;
     terrainCtx = terrainCanvas.getContext('2d');
-    terrainCtx.imageSmoothingEnabled = false;
   }
+
+  generateTerrain(seed);
+  scatterNature();
   renderTerrainAll();
 
-  // 初始文明
-  const spots = [];
-  for (let i = 0; i < 700 && world.villages.length < 2; i++) {
-    const tx = 8 + ((Math.random() * (W - 16)) | 0);
-    const ty = 8 + ((Math.random() * (H - 16)) | 0);
+  // 初始四个国家
+  const placed = [];
+  let guard = 0;
+  while (placed.length < 4 && guard++ < 1200) {
+    const tx = Math.floor(rand(18, W - 18));
+    const ty = Math.floor(rand(14, H - 14));
     if (!canPlaceVillage(tx, ty)) continue;
-    if (spots.some(s => dist2(s.tx, s.ty, tx, ty) < 38 * 38)) continue;
-    spots.push({ tx, ty });
-    placeVillage(tx, ty, world.villages.length, true);
+    if (placed.some(p => dist2(p.tx, p.ty, tx, ty) < 42 * 42)) continue;
+    placed.push({ tx, ty });
+    placeVillage(tx, ty, placed.length - 1, true);
   }
 
-  // 初始野兽
-  for (let i = 0; i < 10; i++) {
-    const tx = 6 + ((Math.random() * (W - 12)) | 0);
-    const ty = 6 + ((Math.random() * (H - 12)) | 0);
-    if (isLand(tx, ty) && !nearestVillage(tx * TILE, ty * TILE, 18)) spawnBeast(tx, ty);
-  }
-  for (let i = 0; i < 4; i++) {
-    const tx = 6 + ((Math.random() * (W - 12)) | 0);
-    const ty = 6 + ((Math.random() * (H - 12)) | 0);
-    if (isLand(tx, ty) && !nearestVillage(tx * TILE, ty * TILE, 18)) spawnMonster(tx, ty);
+  // 让关系有张力
+  if (placed.length >= 2) {
+    world.rels[0][1] = world.rels[1][0] = -38;
+    world.rels[1][2] = world.rels[2][1] = -22;
+    world.rels[0][2] = world.rels[2][0] = 42;
   }
 
-  // 起始镜头
-  if (world.villages[0]) {
-    cam.zoom = 1.35;
-    cam.x = world.villages[0].tx * TILE - window.innerWidth / (2 * cam.zoom);
-    cam.y = world.villages[0].ty * TILE - window.innerHeight / (2 * cam.zoom);
-    clampCamera();
+  // 初始野生动物与怪物
+  for (let i = 0; i < 6; i++) {
+    const tx = Math.floor(rand(6, W - 6));
+    const ty = Math.floor(rand(6, H - 6));
+    if (isLand(tx, ty)) spawnBeast(tx, ty);
+  }
+  for (let i = 0; i < 3; i++) {
+    const tx = Math.floor(rand(6, W - 6));
+    const ty = Math.floor(rand(6, H - 6));
+    if (isLand(tx, ty)) spawnMonster(tx, ty);
   }
 
-  log('尘埃落定，第一缕阳光照在海面上。');
-  for (const v of world.villages) {
-    log(`${FACTIONS[v.faction].name}部族建立了${v.name}。`, 'build');
-  }
-  if (world.villages.length === 0) log('这片土地还没有文明，使用村庄工具播下第一粒种子。');
+  state.tool = 'land';
+  state.cat = 'terrain';
+  state.brush = 2;
+  state.selectedUnit = null;
+  state.selectedVillage = null;
+  state.selectedTile = null;
+  if (document.getElementById('inspector')) hideInspector();
 
+  const first = world.villages[0];
+  cam.zoom = 1.6;
+  if (first) { cam.x = first.tx * TILE; cam.y = first.ty * TILE; }
+  clampCamera();
+
+  world.log = [];
+  log('世界在虚空中成形。', 'diplo');
+  log('四个国家在群岛上点燃了第一堆篝火。', 'build');
   renderLog();
   updateHUD();
-  setSpeed(1);
+
+  if (document.getElementById('rail')) {
+    buildRail();
+    buildTools();
+    updateToolState();
+  }
+}
+
+/* ---------------- save menu ---------------- */
+
+function openSaveMenu() {
+  renderSlots();
+  document.getElementById('save-menu').classList.remove('hidden');
 }
 
 /* ---------------- boot ---------------- */
 
-async function boot() {
-  try {
-    await loadAssets();
-  } catch (err) {
-    console.error(err);
-  }
+function bindButtons() {
+  document.querySelectorAll('.speed').forEach(b => {
+    b.addEventListener('click', () => setSpeed(Number(b.dataset.speed)));
+  });
 
-  setupUI();
-  resize();
-  newWorld((Math.random() * 1e9) | 0);
-
-  window.addEventListener('resize', resize);
-  canvas.addEventListener('contextmenu', e => e.preventDefault());
-  canvas.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointerleave', () => { state.mouse.inside = false; });
-  canvas.addEventListener('wheel', onWheel, { passive: false });
-
-  requestAnimationFrame(loop);
-}
-
-function loop(now) {
-  const dt = Math.min(0.06, (now - lastTime) / 1000 || 0);
-  lastTime = now;
-
-  if (state.speed > 0) {
-    acc += dt * state.speed;
-    let guard = 0;
-    while (acc >= 0.1 && guard < 12) {
-      simTick(0.1);
-      acc -= 0.1;
-      guard++;
-    }
-    if (guard >= 12) acc = 0;
-  }
-
-  render(now);
-
-  if (now - lastHud > 160) {
-    lastHud = now;
+  document.getElementById('btn-step').addEventListener('click', () => {
+    for (let i = 0; i < 60; i++) simTick(1 / 30);
     updateHUD();
-  }
+    toast('时间推进了两秒');
+  });
 
-  requestAnimationFrame(loop);
+  document.getElementById('btn-zoom-in').addEventListener('click', () => zoomBy(1.18));
+  document.getElementById('btn-zoom-out').addEventListener('click', () => zoomBy(0.85));
+
+  document.getElementById('btn-save').addEventListener('click', openSaveMenu);
+  document.getElementById('btn-save-close').addEventListener('click', () => document.getElementById('save-menu').classList.add('hidden'));
+  document.getElementById('btn-export').addEventListener('click', exportSave);
+  document.getElementById('btn-import').addEventListener('click', () => document.getElementById('file-import').click());
+  document.getElementById('file-import').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    if (f) importSave(f);
+    e.target.value = '';
+  });
+  document.getElementById('btn-shot').addEventListener('click', screenshot);
+
+  document.getElementById('btn-help').addEventListener('click', () => document.getElementById('help').classList.remove('hidden'));
+  document.getElementById('btn-help-close').addEventListener('click', () => document.getElementById('help').classList.add('hidden'));
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    newWorld();
+    setSpeed(1);
+    toast('新的世界诞生了');
+  });
+
+  document.getElementById('btn-start').addEventListener('click', () => {
+    document.getElementById('splash').classList.add('hidden');
+    setSpeed(1);
+  });
+  document.getElementById('btn-new').addEventListener('click', () => {
+    newWorld();
+    document.getElementById('splash').classList.add('hidden');
+    setSpeed(1);
+    toast('新的世界诞生了');
+  });
+
+  document.getElementById('brush-plus').addEventListener('click', () => {
+    state.brush = clamp(state.brush + 1, 1, 10);
+    updateToolState();
+  });
+  document.getElementById('brush-minus').addEventListener('click', () => {
+    state.brush = clamp(state.brush - 1, 1, 10);
+    updateToolState();
+  });
+
+  document.getElementById('insp-close').addEventListener('click', clearSelection);
 }
 
-boot();
+function boot() {
+  resizeCanvas();
+  newWorld();
+  buildRail();
+  buildTools();
+  updateToolState();
+  bindInput();
+  bindButtons();
+  bindInspectorActions();
+  bindMinimap();
+  setSpeed(0);
+
+  let last = performance.now();
+  let acc = 0;
+  let hudAt = 0, miniAt = 0, inspAt = 0;
+
+  function frame(ts) {
+    const dt = Math.min(0.05, (ts - last) / 1000);
+    last = ts;
+
+    if (state.speed > 0) {
+      acc += dt * state.speed;
+      let guard = 0;
+      while (acc >= 1 / 30 && guard++ < 8) {
+        simTick(1 / 30);
+        acc -= 1 / 30;
+      }
+    } else {
+      acc = 0;
+    }
+
+    render();
+
+    if (ts - hudAt > 220) {
+      hudAt = ts;
+      updateHUD();
+    }
+    if (state.selectedUnit || state.selectedVillage || state.selectedTile) {
+      if (ts - inspAt > 900) {
+        inspAt = ts;
+        updateInspector();
+      }
+    }
+    if (ts - miniAt > 600) {
+      miniAt = ts;
+      drawMinimap();
+    }
+    if (ts - inspAt > 500) {
+      inspAt = ts;
+      if (state.mouse.inside && state.tool === 'select') {
+        const hit = pickAt(state.mouse.wx, state.mouse.wy);
+        state.hoverUnit = hit.type === 'unit' ? hit.unit : null;
+      } else {
+        state.hoverUnit = null;
+      }
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+loadAssets().then(() => {
+  boot();
+}).catch(err => {
+  console.error(err);
+  boot();
+});
+
+
+
+

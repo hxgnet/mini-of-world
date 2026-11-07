@@ -15,60 +15,88 @@
   <header id="topbar">
     <div class="brand">
       <div class="brand-title">微尘世界</div>
-      <div class="brand-sub">PIXEL WORLD SANDBOX</div>
+      <div class="brand-sub">PIXEL GOD SANDBOX</div>
     </div>
     <div class="stats">
       <div class="stat"><span class="stat-label">纪元</span><span class="stat-value" id="stat-year">1</span></div>
       <div class="stat"><span class="stat-label">人口</span><span class="stat-value" id="stat-pop">0</span></div>
       <div class="stat"><span class="stat-label">村庄</span><span class="stat-value" id="stat-villages">0</span></div>
+      <div class="stat"><span class="stat-label">国家</span><span class="stat-value" id="stat-kingdoms">0</span></div>
       <div class="stat"><span class="stat-label">局势</span><span class="stat-value" id="stat-war">和平</span></div>
     </div>
     <div class="top-actions">
+      <button class="icon-btn wide" id="btn-save" title="存档 / 读档（S）">存档</button>
+      <button class="icon-btn" id="btn-shot" title="保存世界截图（F）"><img src="assets/icons/star.png" alt="截图"></button>
       <button class="icon-btn" id="btn-zoom-out" title="缩小视野"><img src="assets/icons/zoomOut.png" alt="缩小"></button>
       <button class="icon-btn" id="btn-zoom-in" title="放大视野"><img src="assets/icons/zoomIn.png" alt="放大"></button>
       <div class="speed-group">
-        <button class="icon-btn speed" data-speed="0" title="暂停时间"><img src="assets/icons/pause.png" alt="暂停"></button>
-        <button class="icon-btn speed active" data-speed="1" title="正常速度">1×</button>
-        <button class="icon-btn speed" data-speed="2" title="两倍速度">2×</button>
-        <button class="icon-btn speed" data-speed="4" title="四倍速度">4×</button>
+        <button class="icon-btn speed" data-speed="0" title="暂停（空格）"><img src="assets/icons/pause.png" alt="暂停"></button>
+        <button class="icon-btn speed active" data-speed="1" title="正常速度（1）">1×</button>
+        <button class="icon-btn speed" data-speed="2" title="两倍速度（2）">2×</button>
+        <button class="icon-btn speed" data-speed="4" title="四倍速度（3）">4×</button>
+        <button class="icon-btn" id="btn-step" title="推进两秒"><img src="assets/icons/next.png" alt="单步"></button>
       </div>
       <button class="icon-btn" id="btn-help" title="操作说明"><img src="assets/icons/information.png" alt="帮助"></button>
       <button class="icon-btn" id="btn-reset" title="重开世界"><img src="assets/icons/rewind.png" alt="重开"></button>
     </div>
   </header>
 
+  <nav id="rail"></nav>
+
+  <section id="tool-panel">
+    <div class="panel-title" id="tool-panel-title">地形</div>
+    <div id="tools"></div>
+    <div id="tool-hint">左键使用神力，按住可连续涂抹</div>
+    <div class="brush-row">
+      <span class="brush-label">笔刷</span>
+      <button class="brush-btn" id="brush-minus" title="缩小笔刷（-）"><img src="assets/icons/minus.png" alt="缩小笔刷"></button>
+      <span id="brush-size">2</span>
+      <button class="brush-btn" id="brush-plus" title="放大笔刷（+）"><img src="assets/icons/plus.png" alt="放大笔刷"></button>
+    </div>
+  </section>
+
   <aside id="log-panel">
     <div class="panel-title">世界纪事</div>
     <div id="log-list"></div>
   </aside>
 
-  <div id="inspector">
+  <aside id="inspector" class="hidden">
+    <button id="insp-close" title="关闭（Esc）">×</button>
+    <div class="insp-kicker" id="insp-kicker">WORLD</div>
     <div class="insp-title" id="insp-title">世界观察</div>
-    <div class="insp-body" id="insp-body">把鼠标移到世界上，查看土地与生灵。</div>
+    <div class="insp-body" id="insp-body"></div>
+    <div class="insp-actions" id="insp-actions"></div>
+  </aside>
+
+  <div id="minimap-wrap">
+    <div class="minimap-head"><span>世界地图</span><span id="minimap-hint">点击跳转</span></div>
+    <canvas id="minimap" width="180" height="110"></canvas>
   </div>
 
   <div id="toast"></div>
 
-  <footer id="toolbar">
-    <div class="brush-row">
-      <span class="brush-label">笔刷</span>
-      <button class="brush-btn" id="brush-minus" title="缩小笔刷"><img src="assets/icons/minus.png" alt="缩小笔刷"></button>
-      <span id="brush-size">2</span>
-      <button class="brush-btn" id="brush-plus" title="放大笔刷"><img src="assets/icons/plus.png" alt="放大笔刷"></button>
-      <span class="brush-hint">左键使用神力 · 右键拖动平移 · 滚轮缩放</span>
+  <div id="save-menu" class="overlay hidden">
+    <div class="save-panel">
+      <div class="panel-title">世界存档</div>
+      <div id="slots"></div>
+      <div class="save-row">
+        <button class="ghost-btn" id="btn-export">导出文件</button>
+        <button class="ghost-btn" id="btn-import">导入文件</button>
+        <input type="file" id="file-import" accept=".json,application/json" hidden>
+        <button class="ghost-btn" id="btn-save-close">关闭</button>
+      </div>
     </div>
-    <div class="tools" id="tools"></div>
-  </footer>
+  </div>
 
   <div id="splash" class="overlay">
     <div class="splash-panel">
       <div class="splash-kicker">A PIXEL GOD SANDBOX</div>
       <h1>微尘世界</h1>
-      <p class="splash-sub">抬起陆地，播撒生命，看四个部族在尘埃里兴亡。</p>
+      <p class="splash-sub">抬起陆地，播撒生命，看四个国家在尘埃里兴亡。</p>
       <ul class="splash-list">
         <li><span>01</span>塑造山川、海洋、森林与荒漠</li>
-        <li><span>02</span>放置村庄，让村民自行繁衍建造</li>
-        <li><span>03</span>降下火焰、雷电、瘟疫与战争</li>
+        <li><span>02</span>立国建村，让村民耕作、建造、繁衍</li>
+        <li><span>03</span>操纵外交与战争，降下天灾与神迹</li>
       </ul>
       <div class="splash-buttons">
         <button id="btn-start" class="big-btn">进入世界</button>
@@ -83,13 +111,13 @@
       <div class="panel-title">操作说明</div>
       <div class="help-grid">
         <div><b>左键</b><span>使用当前神力，按住可连续涂抹</span></div>
-        <div><b>右键拖动</b><span>平移镜头</span></div>
-        <div><b>滚轮</b><span>缩放世界</span></div>
-        <div><b>暂停 / 1× 2× 4×</b><span>控制时间流速</span></div>
-        <div><b>笔刷 +/-</b><span>调整神力影响范围</span></div>
-        <div><b>观察</b><span>点击生灵查看详情</span></div>
+        <div><b>右键拖动</b><span>平移镜头；滚轮缩放</span></div>
+        <div><b>观察</b><span>点击生灵、房屋或村庄，右侧查看详情</span></div>
+        <div><b>空格 / 1 2 3</b><span>暂停与 1×、2×、4× 时间流速</span></div>
+        <div><b>方向键</b><span>平移镜头；+ / - 调整笔刷</span></div>
+        <div><b>S / F</b><span>打开存档、保存截图</span></div>
       </div>
-      <p class="help-note">人类会加入附近的村庄。不同部族在和平时期互不侵犯，战争爆发后会互相讨伐。怪物会袭击所有生灵。火焰会蔓延，瘟疫会传染，村庄会自行建造房屋并繁衍人口。</p>
+      <p class="help-note">人类会在村庄定居，农夫耕作、工匠造屋、战士卫国。国家之间会结盟、宣战、求和；国王战死会引发继承。火焰会蔓延，瘟疫与僵尸会传染，龙卷风、地震、火山与酸雨会改写地貌。</p>
       <button id="btn-help-close" class="big-btn">明白了</button>
     </div>
   </div>
