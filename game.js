@@ -4,9 +4,26 @@
    ========================================================= */
 
 const TILE = 16;
-const W = 180;
-const H = 110;
+let W = 180;
+let H = 110;
 const T_WATER = 0, T_SAND = 1, T_GRASS = 2, T_ROCK = 3;
+
+const MAP_SIZES = {
+  small:  { w: 120, h: 76,  name: '小' },
+  medium: { w: 180, h: 110, name: '中' },
+  large:  { w: 240, h: 150, name: '大' }
+};
+
+const THEME_PRESETS = {
+  island:    { name: '群岛', seaQ: 0.46, fallPow: 2.35, landAmp: 0.55, fallAmp: 0.55, bias: -0.12, mtnQ: 0.62, mtnThr: 0.66, sandThr: 0.31, treeMul: 1.0 },
+  continent: { name: '大陆', seaQ: 0.37, fallPow: 1.55, landAmp: 0.50, fallAmp: 0.50, bias:  0.05, mtnQ: 0.74, mtnThr: 0.72, sandThr: 0.28, treeMul: 1.0 },
+  ocean:     { name: '海洋', seaQ: 0.60, fallPow: 2.9,  landAmp: 0.55, fallAmp: 0.55, bias: -0.24, mtnQ: 0.71, mtnThr: 0.74, sandThr: 0.36, treeMul: 0.7 },
+  mountain:  { name: '高山', seaQ: 0.44, fallPow: 2.20, landAmp: 0.55, fallAmp: 0.55, bias: -0.05, mtnQ: 0.51, mtnThr: 0.49, sandThr: 0.30, treeMul: 0.6 },
+  forest:    { name: '森林', seaQ: 0.46, fallPow: 2.35, landAmp: 0.55, fallAmp: 0.55, bias: -0.10, mtnQ: 0.71, mtnThr: 0.74, sandThr: 0.18, treeMul: 1.9 },
+  desert:    { name: '沙漠', seaQ: 0.50, fallPow: 2.55, landAmp: 0.55, fallAmp: 0.55, bias: -0.10, mtnQ: 0.62, mtnThr: 0.68, sandThr: 0.56, treeMul: 0.4 }
+};
+
+const worldConfig = { size: 'medium', theme: 'island' };
 
 const FACTIONS = [
   { key: 'blue',  name: '蓝曦', color: '#7aa2ff', villageNames: ['蓝泉村', '洱海湾', '青帆港', '霜溪寨', '潮声堡'] },
@@ -111,6 +128,8 @@ const state = {
   panning: false,
   pan: null,
   lastPaint: null,
+  touches: new Map(),
+  pinchLast: 0,
   hoverUnit: null,
   hoverVillage: null,
   selectedUnit: null,
@@ -227,6 +246,7 @@ function fbm(x, y, seed, octaves) {
 
 function generateTerrain(seed) {
   const cx = W / 2, cy = H / 2;
+  const tp = THEME_PRESETS[worldConfig.theme] || THEME_PRESETS.island;
   const elev = new Float32Array(W * H);
   const mtn = new Float32Array(W * H);
 
@@ -235,19 +255,19 @@ function generateTerrain(seed) {
       const nx = (x - cx) / (W * 0.5);
       const ny = (y - cy) / (H * 0.5);
       const d = Math.sqrt(nx * nx * 0.82 + ny * ny * 1.02);
-      const fall = 1 - Math.pow(Math.min(1, d), 2.35);
+      const fall = 1 - Math.pow(Math.min(1, d), tp.fallPow);
       const base = fbm(x * 0.035, y * 0.035, seed, 5);
       const i = tileIdx(x, y);
-      elev[i] = base * 0.55 + fall * 0.55 - 0.12;
+      elev[i] = base * tp.landAmp + fall * tp.fallAmp + tp.bias;
       mtn[i] = fbm(x * 0.07 + 91, y * 0.07 + 37, seed + 41, 4);
     }
   }
 
   const sorted = Array.from(elev).sort((a, b) => a - b);
   const q = p => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
-  const seaLevel = q(0.46);
-  const beachLine = q(0.498);
-  const midLine = q(0.62);
+  const seaLevel = q(tp.seaQ);
+  const beachLine = q(Math.min(0.98, tp.seaQ + 0.038));
+  const midLine = q(tp.mtnQ);
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -256,12 +276,12 @@ function generateTerrain(seed) {
       let t;
       if (e < seaLevel) t = T_WATER;
       else if (e < beachLine) t = T_SAND;
-      else if (e > midLine && mtn[i] > 0.66) t = T_ROCK;
+      else if (e > midLine && mtn[i] > tp.mtnThr) t = T_ROCK;
       else t = T_GRASS;
 
       world.terrain[i] = t;
       const moist = fbm(x * 0.055 + 31, y * 0.055 + 17, seed + 9, 4);
-      if (t === T_GRASS && moist < 0.31) {
+      if (t === T_GRASS && moist < tp.sandThr) {
         world.terrain[i] = T_SAND;
         world.variant[i] = 0;
       } else {
@@ -288,6 +308,8 @@ function addTree(tx, ty, type) {
 }
 
 function scatterNature() {
+  const tp = THEME_PRESETS[worldConfig.theme] || THEME_PRESETS.island;
+  const mul = tp.treeMul;
   for (let y = 1; y < H - 1; y++) {
     for (let x = 1; x < W - 1; x++) {
       const i = tileIdx(x, y);
@@ -298,13 +320,13 @@ function scatterNature() {
           return v < 0.52 ? 'tree' : v < 0.72 ? 'tree2' : v < 0.9 ? 'tree3' : 'tree4';
         };
         if (world.variant[i] === 1) {
-          if (Math.random() < 0.27) addTree(x, y, Math.random() < 0.86 ? pickTree() : (Math.random() < 0.5 ? 'bush' : 'bush2'));
-        } else if (Math.random() < 0.017) {
+          if (Math.random() < 0.27 * mul) addTree(x, y, Math.random() < 0.86 ? pickTree() : (Math.random() < 0.5 ? 'bush' : 'bush2'));
+        } else if (Math.random() < 0.017 * mul) {
           addTree(x, y, pickTree());
-        } else if (Math.random() < 0.018) {
+        } else if (Math.random() < 0.018 * mul) {
           addTree(x, y, Math.random() < 0.5 ? 'bush' : 'bush2');
         }
-      } else if (t === T_SAND && Math.random() < 0.02) {
+      } else if (t === T_SAND && Math.random() < 0.02 * mul) {
         addTree(x, y, 'cactus');
       }
     }
@@ -2559,6 +2581,16 @@ function zoomBy(factor) {
   clampCamera();
 }
 
+function zoomAt(sx, sy, factor) {
+  const rect = document.getElementById('world').getBoundingClientRect();
+  const wx = (sx - rect.left - rect.width / 2) / cam.zoom + cam.x;
+  const wy = (sy - rect.top - rect.height / 2) / cam.zoom + cam.y;
+  cam.zoom = clamp(cam.zoom * factor, 0.45, 3.4);
+  cam.x = wx - (sx - rect.left - rect.width / 2) / cam.zoom;
+  cam.y = wy - (sy - rect.top - rect.height / 2) / cam.zoom;
+  clampCamera();
+}
+
 function pickAt(wx, wy) {
   for (const h of world.houses) {
     const cx = h.tx * TILE + 8;
@@ -2615,7 +2647,7 @@ function bindInput() {
   cvs.addEventListener('contextmenu', e => e.preventDefault());
 
   cvs.addEventListener('pointerdown', e => {
-    cvs.setPointerCapture(e.pointerId);
+    try { cvs.setPointerCapture(e.pointerId); } catch (_) {}
     if (e.button === 2 || e.button === 1) {
       state.panning = true;
       state.pan = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y };
@@ -2624,10 +2656,14 @@ function bindInput() {
     if (e.button !== 0) return;
     const p = screenToWorld(e.clientX, e.clientY);
     if (e.pointerType === 'touch') {
-      state.touch = {
-        id: e.pointerId, startX: e.clientX, startY: e.clientY,
-        camX: cam.x, camY: cam.y, wx: p.x, wy: p.y, used: false, at: performance.now()
-      };
+      state.touches.set(e.pointerId, {
+        x: e.clientX, y: e.clientY,
+        startX: e.clientX, startY: e.clientY,
+        camX: cam.x, camY: cam.y,
+        wx: p.x, wy: p.y,
+        used: false, at: performance.now()
+      });
+      if (state.touches.size === 2) state.pinchLast = 0;
       return;
     }
     state.painting = true;
@@ -2643,14 +2679,30 @@ function bindInput() {
     state.mouse.wy = p.y;
     state.mouse.inside = true;
 
-    if (state.touch && e.pointerId === state.touch.id) {
-      const dx = e.clientX - state.touch.startX;
-      const dy = e.clientY - state.touch.startY;
-      if (!state.touch.used && Math.hypot(dx, dy) > 10) state.touch.used = true;
-      if (state.touch.used) {
-        cam.x = state.touch.camX - dx / cam.zoom;
-        cam.y = state.touch.camY - dy / cam.zoom;
-        clampCamera();
+    if (e.pointerType === 'touch' && state.touches.has(e.pointerId)) {
+      const t = state.touches.get(e.pointerId);
+      t.x = e.clientX;
+      t.y = e.clientY;
+      if (state.touches.size === 2) {
+        const pts = [...state.touches.values()];
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        if (state.pinchLast > 0) {
+          const factor = clamp(dist / state.pinchLast, 0.7, 1.4);
+          const midX = (pts[0].x + pts[1].x) / 2;
+          const midY = (pts[0].y + pts[1].y) / 2;
+          zoomAt(midX, midY, factor);
+        }
+        state.pinchLast = dist;
+        pts.forEach(pt => pt.used = true);
+      } else if (state.touches.size === 1) {
+        const dx = e.clientX - t.startX;
+        const dy = e.clientY - t.startY;
+        if (!t.used && Math.hypot(dx, dy) > 10) t.used = true;
+        if (t.used) {
+          cam.x = t.camX - dx / cam.zoom;
+          cam.y = t.camY - dy / cam.zoom;
+          clampCamera();
+        }
       }
       return;
     }
@@ -2681,10 +2733,20 @@ function bindInput() {
   });
 
   const end = e => {
-    if (state.touch) {
-      const t = state.touch;
-      if (!t.used && performance.now() - t.at < 700) useToolAt(t.wx, t.wy);
-      state.touch = null;
+    if (e.pointerType === 'touch') {
+      const t = state.touches.get(e.pointerId);
+      if (t) {
+        state.touches.delete(e.pointerId);
+        if (state.touches.size === 1) {
+          const remaining = state.touches.values().next().value;
+          remaining.startX = remaining.x;
+          remaining.startY = remaining.y;
+          remaining.camX = cam.x;
+          remaining.camY = cam.y;
+        } else if (state.touches.size === 0) {
+          if (!t.used && performance.now() - t.at < 700) useToolAt(t.wx, t.wy);
+        }
+      }
     }
     state.painting = false;
     state.panning = false;
@@ -2699,7 +2761,7 @@ function bindInput() {
 
   cvs.addEventListener('wheel', e => {
     e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.12 : 0.89);
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 0.89);
   }, { passive: false });
 
   window.addEventListener('keydown', e => {
@@ -2982,6 +3044,10 @@ function drawVillageNames(vb) {
 
 function newWorld(seed) {
   seed = seed || ((Math.random() * 1e9) | 0);
+  const size = MAP_SIZES[worldConfig.size] || MAP_SIZES.medium;
+  W = size.w;
+  H = size.h;
+
   world = {
     seed,
     time: 0,
@@ -3021,10 +3087,10 @@ function newWorld(seed) {
 
   if (!terrainCanvas) {
     terrainCanvas = document.createElement('canvas');
-    terrainCanvas.width = W * TILE;
-    terrainCanvas.height = H * TILE;
     terrainCtx = terrainCanvas.getContext('2d');
   }
+  terrainCanvas.width = W * TILE;
+  terrainCanvas.height = H * TILE;
 
   generateTerrain(seed);
   scatterNature();
@@ -3077,7 +3143,8 @@ function newWorld(seed) {
   clampCamera();
 
   world.log = [];
-  log('世界在虚空中成形。', 'diplo');
+  const tp = THEME_PRESETS[worldConfig.theme] || THEME_PRESETS.island;
+  log(`一片${tp.name}地貌在虚空中成形。`, 'diplo');
   log('四个国家在群岛上点燃了第一堆篝火。', 'build');
   renderLog();
   updateHUD();
@@ -3223,6 +3290,11 @@ function centerOn(x, y) {
 
 /* ---------------- boot ---------------- */
 
+function syncWorldConfigUI() {
+  document.querySelectorAll('.cfg-btn[data-size]').forEach(b => b.classList.toggle('active', b.dataset.size === worldConfig.size));
+  document.querySelectorAll('.cfg-btn[data-theme]').forEach(b => b.classList.toggle('active', b.dataset.theme === worldConfig.theme));
+}
+
 function bindButtons() {
   document.querySelectorAll('.speed').forEach(b => {
     b.addEventListener('click', () => setSpeed(Number(b.dataset.speed)));
@@ -3300,18 +3372,27 @@ function bindButtons() {
   document.getElementById('btn-help').addEventListener('click', () => document.getElementById('help').classList.remove('hidden'));
   document.getElementById('btn-help-close').addEventListener('click', () => document.getElementById('help').classList.add('hidden'));
   document.getElementById('btn-reset').addEventListener('click', () => {
+    syncWorldConfigUI();
+    document.getElementById('splash').classList.remove('hidden');
+  });
+
+  document.querySelectorAll('.cfg-btn[data-size]').forEach(b => b.addEventListener('click', () => {
+    worldConfig.size = b.dataset.size;
+    syncWorldConfigUI();
+  }));
+  document.querySelectorAll('.cfg-btn[data-theme]').forEach(b => b.addEventListener('click', () => {
+    worldConfig.theme = b.dataset.theme;
+    syncWorldConfigUI();
+  }));
+
+  document.getElementById('btn-start').addEventListener('click', () => {
     newWorld();
+    document.getElementById('splash').classList.add('hidden');
     setSpeed(1);
     toast('新的世界诞生了');
   });
-
-  document.getElementById('btn-start').addEventListener('click', () => {
-    document.getElementById('splash').classList.add('hidden');
-    setSpeed(1);
-  });
   document.getElementById('btn-new').addEventListener('click', () => {
     newWorld();
-    document.getElementById('splash').classList.add('hidden');
     setSpeed(1);
     toast('新的世界诞生了');
   });
@@ -3330,6 +3411,7 @@ function bindButtons() {
 
 function boot() {
   loadSettings();
+  syncWorldConfigUI();
   resizeCanvas();
   newWorld();
   applySettings();

@@ -384,6 +384,32 @@ body {
 .ghost-btn:hover { border-color: var(--gold); color: var(--gold); }
 .credits { margin-top: 22px; font-size: 10px; color: #6f5a3d; letter-spacing: 1px; }
 
+/* ---------- world config ---------- */
+.world-config {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 18px 0 22px;
+  padding: 16px 18px;
+  background: rgba(10, 6, 3, 0.55);
+  border: 1px solid #5a3d20;
+}
+.cfg-block { display: flex; flex-direction: column; gap: 7px; }
+.cfg-label { font-size: 10px; letter-spacing: 3px; color: var(--gold); }
+.cfg-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.cfg-btn {
+  padding: 7px 14px;
+  background: linear-gradient(180deg, #33240f, #1d1309);
+  border: 2px solid #5a3d20;
+  color: #cbb58f;
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 2px;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.cfg-btn:hover { border-color: #9a7444; color: var(--paper); }
+.cfg-btn.active { border-color: var(--gold); color: var(--gold-strong); background: linear-gradient(180deg, #5a3d20, #3a2814); }
+
 .help-panel {
   width: min(640px, calc(100vw - 40px));
   padding: 26px 30px 24px;
